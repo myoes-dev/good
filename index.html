@@ -46,6 +46,7 @@
             letter-spacing: -0.015em;
         }
 
+        /* Плашка профиля */
         .profile-bar {
             display: flex;
             align-items: center;
@@ -224,6 +225,7 @@
         .glass-input.has-prefix { padding-left: 32px; }
         .glass-input:focus, .glass-textarea:focus { border-color: rgba(255, 255, 255, 0.35); }
 
+        /* Макет карточки Telegram */
         .tg-mockup-wrap {
             background: #0f161e;
             border: 1px solid rgba(255, 255, 255, 0.08);
@@ -678,7 +680,7 @@
         </div>
     </div>
 
-    <!-- Нижний док на 3 страницы: Чаты | Оффер | Настройки -->
+    <!-- Нижний док на 3 страницы -->
     <div class="bottom-dock-wrap">
         <div class="bottom-dock" id="bottomDock">
             <div class="dock-pill" id="dockPill"></div>
@@ -822,10 +824,12 @@
 
             let textHtml = '';
             if (tpl === 'original') {
+                // Ссылка вшита в название подарка KissedFrog #940
                 textHtml = lang === 'en'
-                    ? `<div style="${weightStyle}">User (<span class="tg-link">@${rec}</span>) offers you 5000 ⭐ for gift <span class="tg-link">https://t.me/nft/KissedFrog-940</span><br><br>Remaining: 5h 59m</div>`
-                    : `<div style="${weightStyle}">Пользователь (<span class="tg-link">@${rec}</span>) предлагает вам 5000 ⭐ за подарок <span class="tg-link">https://t.me/nft/KissedFrog-940</span><br><br>Осталось: 5h 59m</div>`;
+                    ? `<div style="${weightStyle}">User (<span class="tg-link">@${rec}</span>) offers you 5000 ⭐ for gift <span class="tg-link">KissedFrog #940</span><br><br>Remaining: 5h 59m</div>`
+                    : `<div style="${weightStyle}">Пользователь (<span class="tg-link">@${rec}</span>) предлагает вам 5000 ⭐ за подарок <span class="tg-link">KissedFrog #940</span><br><br>Осталось: 5h 59m</div>`;
             } else {
+                // Дефолтный вариант
                 textHtml = lang === 'en'
                     ? `<div style="${weightStyle}">You have an offer from <span class="tg-link">@${rec}</span><br><b>5000 ⭐</b> for gift<br><span class="tg-link">KissedFrog #940</span><br><br>Remaining: <b>5h 59m</b></div>`
                     : `<div style="${weightStyle}">Вам предлагает оффер <span class="tg-link">@${rec}</span><br><b>5000 ⭐</b> за подарок<br><span class="tg-link">KissedFrog #940</span><br><br>Осталось: <b>5h 59m</b></div>`;
