@@ -1,1216 +1,1188 @@
-import asyncio
-import base64
-import json
-import logging
-import re
-import sqlite3
-import time
-from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, Dict, List
-from urllib.parse import quote
-
-import aiohttp
-from aiogram import BaseMiddleware, Bot, Dispatcher, Router, F
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.filters import Command, CommandObject
-from aiogram.types import (
-    Message,
-    CallbackQuery,
-    BusinessConnection,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    WebAppInfo,
-    LinkPreviewOptions,
-    TelegramObject,
-    User
-)
-
-# ================= КОНФИГУРАЦИЯ =================
-BOT_TOKEN = "8687269105:AAEq3UpRZtCesWb87BIj9sMY3WLv-V070Us"
-ADMIN_USERNAME = "myoec"
-WEBAPP_URL = "https://myoec-sys.github.io/Mini/"
-DB_NAME = "business_bot.db"
-
-# Длительность оффера: 6 часов (360 минут)
-OFFER_DURATION_HOURS = 6
-SILENT_EDIT_CHECKPOINTS = [300, 240, 180, 120, 60, 30, 15, 5]
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-router = Router()
-
-NO_USERNAME_WARNING_RU = (
-    "⚠️ <b>Необходимо установить юзернейм!</b>\n\n"
-    "У вашего аккаунта не указан <code>@username</code> для получения подарков.\n"
-    "❗️ <b>ВНИМАНИЕ:</b> Если вы не установите юзернейм в настройках Telegram или через команду "
-    "<code>/setreceiver @username</code>, то при передаче <b>ваш NFT-подарок безвозвратно сгорит!</b>"
-)
-
-NO_USERNAME_WARNING_EN = (
-    "⚠️ <b>You must set a username!</b>\n\n"
-    "Your account does not have a <code>@username</code> set for receiving gifts.\n"
-    "❗️ <b>WARNING:</b> If you do not set a username in Telegram settings or via "
-    "<code>/setreceiver @username</code>, <b>your NFT gift will be permanently burned/lost!</b>"
-)
-
-LANGS = {
-    "ru": {
-        "offer_header": "Вам предлагает оффер",
-        "for_gift": "за подарок",
-        "for_gifts": "за подарки",
-        "offers_left": "Осталось",
-        "accept_word": "Принять",
-        "decline_word": "Отклонить",
-        "confirm_word": "Подтвердить отправку",
-        "i_sent_btn": "Я отправил подарки",
-        "back": "Назад",
-        "sold_text": (
-            "{icon} Подарки были успешно проданы за <b>{price} {curr}</b>!\n\n"
-            "Список лотов:\n{gifts_list}\n\n"
-            "Для завершения <a href='{gift_link}'>передайте подарки</a>\n"
-            "получателю <a href='{gift_link}'>@{receiver}</a>"
-        ),
-        "not_sent_alert": "Вы еще не передали все подарки.\nНе получено: {missing}",
-        "not_sent_menu": (
-            "⚠️ <b>Подарки еще не получены</b>\n\n"
-            "На аккаунте @{receiver} еще не обнаружены лоты:\n{missing}\n\n"
-            "Для завершения <a href='{gift_link}'>передайте подарки</a> и нажмите проверку повторно:"
-        ),
-        "deal_completed_menu": (
-            "{icon} <b>Сделка завершена</b>\n\n"
-            "Квитанция: <code>#TX-00{id}</code>\n"
-            "Лоты:\n{gifts_list}\n"
-            "Получатель: <a href='https://t.me/{receiver}'>@{receiver}</a>\n"
-            "Сумма: <b>{price} {curr}</b>\n"
-            "Статус: <b>Оплачено</b>"
-        ),
-        "transfer_btn": "Передать NFT @",
-        "how_to": "Инструкция",
-        "declined": "{icon} <b>Вы отклонили оффер</b>",
-        "declined_alert": "Вы отклонили оффер",
-        "expired_text": "⏳ <b>Оффер просрочен (истекли 6 часов)</b>",
-        "accepted_step2": (
-            "{icon} <b>Подтверждение сделки</b>\n\n"
-            "Вам предлагает оффер <a href='https://t.me/{receiver}'>@{receiver}</a>\n"
-            "Лоты:\n{gifts_list}\n"
-            "Сумма к зачислению: <b>{price} {curr}</b>\n\n"
-            "Подтвердите отправку подарков:"
-        ),
-        "no_sub": "У вас нет активной подписки.\nИспользуйте <code>/tempagifts</code> для активации доступа.",
-        "lang_changed": "Язык офферов: <b>RU</b>"
-    },
-    "en": {
-        "offer_header": "You have an offer from",
-        "for_gift": "for gift",
-        "for_gifts": "for gifts",
-        "offers_left": "Remaining",
-        "accept_word": "Accept",
-        "decline_word": "Decline",
-        "confirm_word": "Confirm sending",
-        "i_sent_btn": "I sent the gifts",
-        "back": "Back",
-        "sold_text": (
-            "{icon} Gifts were successfully sold for <b>{price} {curr}</b>!\n\n"
-            "Items:\n{gifts_list}\n\n"
-            "To complete the deal, <a href='{gift_link}'>send gifts</a>\n"
-            "to <a href='{gift_link}'>@{receiver}</a>"
-        ),
-        "not_sent_alert": "Not all gifts transferred yet.\nMissing: {missing}",
-        "not_sent_menu": (
-            "⚠️ <b>Gifts not received yet</b>\n\n"
-            "Missing on @{receiver}'s account:\n{missing}\n\n"
-            "Please <a href='{gift_link}'>send gifts</a> and verify again:"
-        ),
-        "deal_completed_menu": (
-            "{icon} <b>Deal Completed</b>\n\n"
-            "Receipt: <code>#TX-00{id}</code>\n"
-            "Items:\n{gifts_list}\n"
-            "Receiver: <a href='https://t.me/{receiver}'>@{receiver}</a>\n"
-            "Amount: <b>{price} {curr}</b>\n"
-            "Status: <b>Paid</b>"
-        ),
-        "transfer_btn": "Transfer NFT @",
-        "how_to": "Instructions",
-        "declined": "{icon} <b>You declined the offer</b>",
-        "declined_alert": "You declined the offer",
-        "expired_text": "⏳ <b>Offer expired (6 hours passed)</b>",
-        "accepted_step2": (
-            "{icon} <b>Deal Confirmation</b>\n\n"
-            "Offer from <a href='https://t.me/{receiver}'>@{receiver}</a>\n"
-            "Items:\n{gifts_list}\n"
-            "Amount to receive: <b>{price} {curr}</b>\n\n"
-            "Please confirm sending gifts:"
-        ),
-        "no_sub": "You don't have an active subscription.\nUse <code>/tempagifts</code> to activate access.",
-        "lang_changed": "Offer language: <b>EN</b>"
-    }
-}
-
-
-# ================= ПАРСЕР ССЫЛОК =================
-def normalize_nft_url(url: str) -> str:
-    if not url:
-        return ""
-    u = str(url).strip()
-    m = re.search(r"(?:t\.me|telegram\.me)/nft/([a-zA-Z0-9_-]+)", u, re.IGNORECASE)
-    if m:
-        return f"https://t.me/nft/{m.group(1)}"
-    m2 = re.match(r"^([a-zA-Z0-9_-]+-\d+)$", u)
-    if m2:
-        return f"https://t.me/nft/{m2.group(1)}"
-    return ""
-
-
-def extract_all_nft_urls(raw_input: Any) -> List[str]:
-    if not raw_input:
-        return []
-    text = " ".join(str(x) for x in raw_input) if isinstance(raw_input, list) else str(raw_input)
-
-    results = []
-    for match in re.finditer(r"(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/nft/([a-zA-Z0-9_-]+)", text, re.IGNORECASE):
-        clean = f"https://t.me/nft/{match.group(1)}"
-        if clean not in results:
-            results.append(clean)
-
-    if not results:
-        for token in re.split(r"[\s,;\n]+", text.strip()):
-            norm = normalize_nft_url(token)
-            if norm and norm not in results:
-                results.append(norm)
-
-    return results
-
-
-def parse_nft_name(url: str) -> str:
-    norm = normalize_nft_url(url) or str(url)
-    slug = norm.rstrip("/").split("/")[-1]
-    if "-" in slug:
-        name_part, num_part = slug.rsplit("-", 1)
-        if num_part.isdigit():
-            return f"{name_part} #{num_part}"
-    return slug or "NFT Gift"
-
-
-def render_gifts_list_html(urls: List[str]) -> str:
-    if len(urls) == 1:
-        return f"<a href='{urls[0]}'>{parse_nft_name(urls[0])}</a>"
-    return "\n".join([f"• <a href='{u}'>{parse_nft_name(u)}</a>" for u in urls])
-
-
-# ================= БАЗА ДАННЫХ =================
-def init_db():
-    with sqlite3.connect(DB_NAME, timeout=10) as conn:
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA busy_timeout=5000;")
-        cursor = conn.cursor()
-        cursor.execute("CREATE TABLE IF NOT EXISTS subscriptions (user_id INTEGER PRIMARY KEY, expires_at TIMESTAMP)")
-        cursor.execute("CREATE TABLE IF NOT EXISTS business_connections (connection_id TEXT PRIMARY KEY, owner_id INTEGER, can_reply BOOLEAN)")
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS offers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER,
-                message_id INTEGER DEFAULT 0,
-                business_connection_id TEXT DEFAULT '',
-                owner_id INTEGER,
-                nft_url TEXT,
-                nft_name TEXT,
-                price REAL,
-                currency TEXT,
-                created_at TIMESTAMP,
-                status TEXT DEFAULT 'active',
-                gift_received INTEGER DEFAULT 0,
-                last_checkpoint INTEGER DEFAULT 360
-            )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS business_chats (
-                chat_id INTEGER,
-                owner_id INTEGER,
-                connection_id TEXT,
-                title TEXT,
-                username TEXT,
-                updated_at TIMESTAMP,
-                PRIMARY KEY (chat_id, owner_id)
-            )
-        """)
-        cursor.execute("CREATE TABLE IF NOT EXISTS bot_config (key TEXT PRIMARY KEY, value TEXT)")
-        conn.commit()
-
-
-def set_config(key: str, value: str):
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("INSERT OR REPLACE INTO bot_config (key, value) VALUES (?, ?)", (key, str(value)))
-        conn.commit()
-
-
-def get_config(key: str, default: str = None) -> str | None:
-    with sqlite3.connect(DB_NAME) as conn:
-        row = conn.execute("SELECT value FROM bot_config WHERE key = ?", (key,)).fetchone()
-        return row[0] if row else default
-
-
-def set_user_receiver(user_id: int, username: str):
-    clean_username = username.replace("@", "").strip()
-    set_config(f"receiver_{user_id}", clean_username)
-
-
-def get_user_receiver(user_id: int, fallback_username: str = None) -> str:
-    saved = get_config(f"receiver_{user_id}")
-    if saved and saved.strip():
-        return saved.strip()
-    if fallback_username and fallback_username.strip():
-        clean = fallback_username.replace("@", "").strip()
-        set_user_receiver(user_id, clean)
-        return clean
-    return ""
-
-
-def get_user_lang(user_id: int) -> str:
-    return get_config(f"lang_{user_id}", "ru")
-
-
-def set_user_lang(user_id: int, lang: str):
-    set_config(f"lang_{user_id}", lang)
-
-
-# ================= НАСТРОЙКИ КАСТОМИЗАЦИИ ВИДА ОФФЕРА =================
-def save_user_style(
-    user_id: int,
-    preview: str,
-    layout: str,
-    icons: str,
-    pos: str,
-    template: str = "default",
-    bold: str = "0",
-    custom_accept: str = "",
-    custom_decline: str = ""
-):
-    set_config(f"style_prev_{user_id}", preview)
-    set_config(f"style_layout_{user_id}", layout)
-    set_config(f"style_icons_{user_id}", icons)
-    set_config(f"style_pos_{user_id}", pos)
-    set_config(f"style_tpl_{user_id}", template if template in ["default", "original"] else "default")
-    set_config(f"style_bold_{user_id}", "1" if str(bold) == "1" else "0")
-    set_config(f"style_acc_{user_id}", custom_accept.strip()[:28])
-    set_config(f"style_dec_{user_id}", custom_decline.strip()[:28])
-
-
-def get_user_style(user_id: int) -> dict:
-    tpl = get_config(f"style_tpl_{user_id}", "default")
-    if tpl not in ["default", "original"]:
-        tpl = "default"
-    return {
-        "preview": get_config(f"style_prev_{user_id}", "1"),
-        "layout": get_config(f"style_layout_{user_id}", "row"),
-        "icons": get_config(f"style_icons_{user_id}", "0"),
-        "pos": get_config(f"style_pos_{user_id}", "down"),
-        "template": tpl,
-        "bold": get_config(f"style_bold_{user_id}", "0"),
-        "custom_accept": get_config(f"style_acc_{user_id}", ""),
-        "custom_decline": get_config(f"style_dec_{user_id}", "")
-    }
-
-
-def is_admin(user: User) -> bool:
-    if not user:
-        return False
-    if user.username and user.username.lower() == ADMIN_USERNAME.lower():
-        set_config("admin_id", str(user.id))
-        return True
-    return get_config("admin_id") == str(user.id)
-
-
-def add_subscription(user_id: int, days: int) -> datetime:
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT expires_at FROM subscriptions WHERE user_id = ?", (user_id,))
-        row = cursor.fetchone()
-        now = datetime.now()
-        new_exp = (datetime.fromisoformat(row[0]) if row and datetime.fromisoformat(row[0]) > now else now) + timedelta(days=days)
-        cursor.execute("INSERT OR REPLACE INTO subscriptions (user_id, expires_at) VALUES (?, ?)", (user_id, new_exp.isoformat()))
-        conn.commit()
-        return new_exp
-
-
-def remove_subscription(user_id: int):
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
-        conn.commit()
-
-
-def has_active_subscription(user: User) -> bool:
-    if is_admin(user):
-        return True
-    with sqlite3.connect(DB_NAME) as conn:
-        row = conn.execute("SELECT expires_at FROM subscriptions WHERE user_id = ?", (user.id,)).fetchone()
-        if not row:
-            return False
-        return datetime.fromisoformat(row[0]) > datetime.now()
-
-
-def save_business_connection(conn_id: str, owner_id: int, can_reply: bool):
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("INSERT OR REPLACE INTO business_connections (connection_id, owner_id, can_reply) VALUES (?, ?, ?)", (conn_id, owner_id, can_reply))
-        conn.commit()
-
-
-def get_connection_owner(conn_id: str) -> int | None:
-    with sqlite3.connect(DB_NAME) as conn:
-        row = conn.execute("SELECT owner_id FROM business_connections WHERE connection_id = ?", (conn_id,)).fetchone()
-        return row[0] if row else None
-
-
-def get_owner_default_conn_id(owner_id: int) -> str:
-    with sqlite3.connect(DB_NAME) as conn:
-        row = conn.execute("SELECT connection_id FROM business_connections WHERE owner_id = ? ORDER BY rowid DESC LIMIT 1", (owner_id,)).fetchone()
-        if row and row[0]:
-            return row[0]
-        row2 = conn.execute("SELECT connection_id FROM business_chats WHERE owner_id = ? ORDER BY updated_at DESC LIMIT 1", (owner_id,)).fetchone()
-        return row2[0] if row2 else ""
-
-
-def save_business_chat(chat_id: int, owner_id: int, conn_id: str, title: str, username: str):
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("""
-            INSERT OR REPLACE INTO business_chats (chat_id, owner_id, connection_id, title, username, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (chat_id, owner_id, conn_id, title or "Личный чат", username or "", datetime.now().isoformat()))
-        conn.commit()
-
-
-def get_chat_recipient_display(owner_id: int, chat_id: int, fallback_str: str = "") -> str:
-    with sqlite3.connect(DB_NAME) as conn:
-        row = conn.execute("SELECT title, username FROM business_chats WHERE owner_id = ? AND chat_id = ? LIMIT 1", (owner_id, chat_id)).fetchone()
-        if row:
-            title, uname = row
-            if uname:
-                return f"@{uname}"
-            if title:
-                return f"{title} (<code>{chat_id}</code>)"
-    return fallback_str or f"<code>{chat_id}</code>"
-
-
-def get_owner_chats_encoded(owner_id: int) -> str:
-    with sqlite3.connect(DB_NAME) as conn:
-        rows = conn.execute("""
-            SELECT chat_id, connection_id, title, username 
-            FROM business_chats 
-            WHERE owner_id = ? 
-            ORDER BY updated_at DESC LIMIT 50
-        """, (owner_id,)).fetchall()
-
-    chats_data = [{"id": r[0], "cid": r[1], "t": r[2][:22], "u": r[3]} for r in rows]
-    raw_json = json.dumps(chats_data, ensure_ascii=False)
-    return base64.urlsafe_b64encode(raw_json.encode("utf-8")).decode("utf-8")
-
-
-def create_offer(chat_id: int, message_id: int, conn_id: str, owner_id: int, urls: List[str], price: float, currency_code: str, created_at: str) -> int:
-    stored_urls = ",".join(urls)
-    names = ", ".join([parse_nft_name(u) for u in urls])
-    with sqlite3.connect(DB_NAME) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO offers (chat_id, message_id, business_connection_id, owner_id, nft_url, nft_name, price, currency, created_at, status, gift_received, last_checkpoint)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, 360)
-        """, (chat_id, message_id, conn_id, owner_id, stored_urls, names, price, currency_code, created_at))
-        conn.commit()
-        return cursor.lastrowid
-
-
-def update_offer_message_id(offer_id: int, message_id: int):
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("UPDATE offers SET message_id = ? WHERE id = ?", (message_id, offer_id))
-        conn.commit()
-
-
-def mark_offer_completed(offer_id: int):
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("UPDATE offers SET status = 'completed', gift_received = 1 WHERE id = ?", (offer_id,))
-        conn.commit()
-
-
-def mark_chat_gifts_received(chat_id: int):
-    with sqlite3.connect(DB_NAME) as conn:
-        conn.execute("UPDATE offers SET gift_received = 1 WHERE chat_id = ? AND status = 'active'", (chat_id,))
-        conn.commit()
-
-
-def get_offer_by_id(offer_id: int) -> tuple | None:
-    with sqlite3.connect(DB_NAME) as conn:
-        return conn.execute(
-            "SELECT id, chat_id, message_id, business_connection_id, owner_id, nft_url, nft_name, price, currency, created_at, status, gift_received FROM offers WHERE id = ?",
-            (offer_id,)
-        ).fetchone()
-
-
-# ================= MIDDLEWARE =================
-class BusinessChatTrackerMiddleware(BaseMiddleware):
-    async def __call__(self, handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]], event: TelegramObject, data: Dict[str, Any]) -> Any:
-        if isinstance(event, Message) and event.business_connection_id:
-            conn_id = event.business_connection_id
-            owner_id = get_connection_owner(conn_id)
-            if not owner_id and event.from_user:
-                owner_id = event.from_user.id
-                save_business_connection(conn_id, owner_id, True)
-
-            if owner_id:
-                full_name = " ".join(filter(None, [event.chat.first_name, event.chat.last_name]))
-                chat_title = full_name or event.chat.title or "Личный чат"
-                save_business_chat(event.chat.id, owner_id, conn_id, chat_title, event.chat.username or "")
-
-            if event.gift or getattr(event, "unique_gift", None):
-                mark_chat_gifts_received(event.chat.id)
-
-        return await handler(event, data)
-
-
-async def smart_reply(message: Message, text: str, reply_markup=None):
-    try:
-        if message.business_connection_id:
-            return await message.bot.send_message(
-                chat_id=message.chat.id,
-                text=text,
-                business_connection_id=message.business_connection_id,
-                reply_markup=reply_markup
-            )
-        return await message.reply(text, reply_markup=reply_markup)
-    except Exception as e:
-        logging.warning(f"Ошибка ответа: {e}")
-
-
-# ================= ПРОВЕРКА ПОДАРКОВ =================
-async def verify_all_gifts_received(nft_urls: List[str], expected_username: str, gift_received_flag: int = 0) -> tuple[bool, List[str]]:
-    if gift_received_flag == 1:
-        return True, []
-
-    clean_user = expected_username.replace("@", "").strip().lower()
-    if not clean_user:
-        return False, [parse_nft_name(u) for u in nft_urls]
-
-    missing = []
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-
-    async with aiohttp.ClientSession(headers=headers) as session:
-        for url in nft_urls:
-            found = False
-            try:
-                async with session.get(url, timeout=8) as resp:
-                    if resp.status == 200:
-                        html = await resp.text()
-                        patterns = [
-                            rf'href="https?://t\.me/{re.escape(clean_user)}"',
-                            rf'@{re.escape(clean_user)}\b',
-                            rf'Owner.*?\b{re.escape(clean_user)}\b',
-                            rf'Владелец.*?\b{re.escape(clean_user)}\b'
-                        ]
-                        for pat in patterns:
-                            if re.search(pat, html, re.IGNORECASE | re.DOTALL):
-                                found = True
-                                break
-            except Exception:
-                pass
-            if not found:
-                missing.append(parse_nft_name(url))
-
-    return len(missing) == 0, missing
-
-
-# ================= ФОРМИРОВАНИЕ КАРТОЧКИ, ШАБЛОНОВ И ЖИРНОСТИ (6 ЧАСОВ) =================
-def get_remaining_time(created_at_str: str) -> str:
-    if not created_at_str:
-        return "5h 59m"
-    created_at = datetime.fromisoformat(created_at_str)
-    expires_at = created_at + timedelta(hours=OFFER_DURATION_HOURS)
-    remaining = expires_at - datetime.now()
-    if remaining.total_seconds() <= 0:
-        return "0h 0m"
-    hours = int(remaining.total_seconds() // 3600)
-    minutes = int((remaining.total_seconds() % 3600) // 60)
-    return f"{hours}h {minutes}m"
-
-
-def render_currency(currency_raw: str) -> str:
-    curr = currency_raw.lower()
-    if any(k in curr for k in ["star", "звезд", "⭐"]):
-        return "⭐"
-    elif any(k in curr for k in ["gram", "грам", "ton", "тон", "💎"]):
-        return "💎 GRAM"
-    elif any(k in curr for k in ["usdt", "usd", "$"]):
-        return "USDT"
-    return currency_raw
-
-
-def build_offer_card_text(
-    owner_id: int,
-    receiver_username: str,
-    urls: List[str],
-    price: float | int,
-    currency_raw: str,
-    lang: str,
-    created_at_str: str
-) -> str:
-    """
-    Формирует текст оффера:
-    - default: стандартный вид
-    - original: Пользователь (@username) предлагает вам 5000 ⭐ за подарок https://t.me/nft/...
-    - bold: если '1', делает весь текст жирным
-    """
-    t = LANGS.get(lang, LANGS["ru"])
-    st = get_user_style(owner_id)
-    tpl = st.get("template", "default")
-    is_bold = (st.get("bold", "0") == "1")
-
-    if float(price).is_integer():
-        price = int(price)
-
-    curr_display = render_currency(currency_raw)
-    rem_time = get_remaining_time(created_at_str)
-
-    if tpl == "original":
-        raw_links_str = ", ".join(urls)
-        if lang == "en":
-            base_text = (
-                f"User (<a href='https://t.me/{receiver_username}'>@{receiver_username}</a>) "
-                f"offers you {price} {curr_display} for gift {raw_links_str}\n\n"
-                f"{t['offers_left']}: {rem_time}"
-            )
-        else:
-            base_text = (
-                f"Пользователь (<a href='https://t.me/{receiver_username}'>@{receiver_username}</a>) "
-                f"предлагает вам {price} {curr_display} за подарок {raw_links_str}\n\n"
-                f"{t['offers_left']}: {rem_time}"
-            )
-    else:
-        gifts_list = render_gifts_list_html(urls)
-        if len(urls) == 1:
-            base_text = (
-                f"{t['offer_header']} <a href='https://t.me/{receiver_username}'>@{receiver_username}</a>\n"
-                f"<b>{price} {curr_display}</b> {t['for_gift']}\n"
-                f"{gifts_list}\n\n"
-                f"{t['offers_left']}: <b>{rem_time}</b>"
-            )
-        else:
-            base_text = (
-                f"{t['offer_header']} <a href='https://t.me/{receiver_username}'>@{receiver_username}</a>\n"
-                f"<b>{price} {curr_display}</b> {t['for_gifts']}:\n"
-                f"{gifts_list}\n\n"
-                f"{t['offers_left']}: <b>{rem_time}</b>"
-            )
-
-    if is_bold:
-        # Убираем вложенные <b> и оборачиваем весь текст целиком в <b>...</b>
-        clean_inner = base_text.replace("<b>", "").replace("</b>", "")
-        return f"<b>{clean_inner}</b>"
-
-    return base_text
-
-
-def build_offer_preview_options(owner_id: int, first_url: str) -> LinkPreviewOptions:
-    st = get_user_style(owner_id)
-    if st["preview"] == "0":
-        return LinkPreviewOptions(is_disabled=True)
-    return LinkPreviewOptions(
-        is_disabled=False,
-        url=first_url,
-        prefer_large_media=True,
-        show_above_text=(st["pos"] == "up")
-    )
-
-
-def get_offer_keyboard(offer_id: int, lang: str, owner_id: int = 0) -> InlineKeyboardMarkup:
-    t = LANGS.get(lang, LANGS["ru"])
-    st = get_user_style(owner_id) if owner_id else {
-        "layout": "row", "icons": "0", "custom_accept": "", "custom_decline": ""
-    }
-
-    use_icons = (st["icons"] == "1")
-    base_acc = st.get("custom_accept") or t["accept_word"]
-    base_dec = st.get("custom_decline") or t["decline_word"]
-
-    dec_label = f"❌ {base_dec}" if use_icons else base_dec
-    acc_label = f"✅ {base_acc}" if use_icons else base_acc
-
-    btn_dec = InlineKeyboardButton(text=dec_label, callback_data=f"offer_decline:{offer_id}:{lang}")
-    btn_acc = InlineKeyboardButton(text=acc_label, callback_data=f"offer_accept:{offer_id}:{lang}")
-
-    if st["layout"] == "col":
-        return InlineKeyboardMarkup(inline_keyboard=[[btn_acc], [btn_dec]])
-    return InlineKeyboardMarkup(inline_keyboard=[[btn_dec, btn_acc]])
-
-
-def get_confirm_keyboard(offer_id: int, lang: str) -> InlineKeyboardMarkup:
-    t = LANGS.get(lang, LANGS["ru"])
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"✅ {t['confirm_word']}", callback_data=f"offer_confirm:{offer_id}:{lang}")],
-        [InlineKeyboardButton(text=t["back"], callback_data=f"offer_back:{offer_id}:{lang}")]
-    ])
-
-
-def get_transfer_keyboard(offer_id: int, lang: str, receiver_username: str) -> InlineKeyboardMarkup:
-    t = LANGS.get(lang, LANGS["ru"])
-    target_url = f"tg://send_gift?to={receiver_username}"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"{t['transfer_btn']}{receiver_username}", url=target_url)],
-        [InlineKeyboardButton(text=f"✅ {t['i_sent_btn']}", callback_data=f"verify_gift:{offer_id}:{lang}")],
-        [InlineKeyboardButton(text=t["how_to"], callback_data=f"how_to_transfer:{lang}:{receiver_username}")]
-    ])
-
-
-def build_webapp_keyboard(user: User) -> ReplyKeyboardMarkup:
-    lang_code = get_user_lang(user.id)
-    receiver = get_user_receiver(user.id, user.username)
-    default_cid = get_owner_default_conn_id(user.id)
-    chats_b64 = get_owner_chats_encoded(user.id)
-    st = get_user_style(user.id)
-    webapp_full_url = (
-        f"{WEBAPP_URL}?v={int(time.time())}&receiver={quote(receiver)}&lang={lang_code}"
-        f"&dcid={quote(default_cid)}&chats={chats_b64}"
-        f"&sprev={st['preview']}&slay={st['layout']}&sico={st['icons']}&spos={st['pos']}"
-        f"&stpl={st['template']}&sbold={st['bold']}"
-        f"&sacc={quote(st['custom_accept'])}&sdec={quote(st['custom_decline'])}"
-    )
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="Панель управления", web_app=WebAppInfo(url=webapp_full_url))]],
-        resize_keyboard=True
-    )
-
-
-async def send_offer_log_to_bot_dm(bot: Bot, owner_user: User, target_display: str, from_username: str, price: float | int, currency_raw: str, urls: List[str]):
-    fmt_price = int(price) if float(price).is_integer() else price
-    gifts_list = render_gifts_list_html(urls)
-    log_text = (
-        f"📤 <b>Вы отправили оффер (на 6 часов)</b>\n\n"
-        f"👤 <b>Юзер (кому):</b> {target_display}\n"
-        f"📨 <b>От кого:</b> @{from_username}\n"
-        f"💰 <b>Цена:</b> {fmt_price} {currency_raw.upper()}\n\n"
-        f"🎁 <b>Подарок:</b>\n{gifts_list}"
-    )
-    try:
-        await bot.send_message(
-            chat_id=owner_user.id,
-            text=log_text,
-            reply_markup=build_webapp_keyboard(owner_user),
-            link_preview_options=LinkPreviewOptions(is_disabled=True)
-        )
-    except Exception as e:
-        logging.warning(f"Не удалось отправить лог в ЛС: {e}")
-
-
-# ================= ДВУХЭТАПНАЯ ОТПРАВКА С ФОЛЛБЭКОМ =================
-async def send_offer_card_to_chat(
-    bot: Bot,
-    chat_id: int,
-    conn_id: str,
-    owner_id: int,
-    receiver_username: str,
-    urls: List[str],
-    price: float | int,
-    currency_raw: str,
-    lang: str
-) -> int:
-    if float(price).is_integer():
-        price = int(price)
-
-    created_at_iso = datetime.now().isoformat()
-    offer_id = create_offer(chat_id, 0, conn_id, owner_id, urls, price, currency_raw, created_at_iso)
-
-    text_card = build_offer_card_text(owner_id, receiver_username, urls, price, currency_raw, lang, created_at_iso)
-    preview = build_offer_preview_options(owner_id, urls[0])
-    kb = get_offer_keyboard(offer_id, lang, owner_id)
-
-    placeholder = await bot.send_message(
-        chat_id=chat_id,
-        text="⏳ Подготовка оффера...",
-        business_connection_id=conn_id
-    )
-    update_offer_message_id(offer_id, placeholder.message_id)
-
-    await asyncio.sleep(1.2)
-
-    try:
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=placeholder.message_id,
-            business_connection_id=conn_id,
-            text=text_card,
-            reply_markup=kb,
-            link_preview_options=preview
-        )
-        return offer_id
-    except Exception as e:
-        logging.warning(f"Фоллбэк редактирования без превью: {e}")
-
-    try:
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=placeholder.message_id,
-            business_connection_id=conn_id,
-            text=text_card,
-            reply_markup=kb,
-            link_preview_options=LinkPreviewOptions(is_disabled=True)
-        )
-    except Exception as e2:
-        logging.error(f"Фоллбэк чистого текста: {e2}")
-        safe_text = (
-            f"Пользователь (@{receiver_username}) предлагает вам {price} {currency_raw.upper()} "
-            f"за подарок {', '.join([parse_nft_name(u) for u in urls])}\n\n"
-            f"Осталось: 5h 59m"
-        )
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=placeholder.message_id,
-            business_connection_id=conn_id,
-            text=safe_text,
-            reply_markup=kb,
-            link_preview_options=LinkPreviewOptions(is_disabled=True)
-        )
-
-    return offer_id
-
-
-# ================= ВОРКЕР ТАЙМЕРА И АВТООТМЕНЫ ЧЕРЕЗ 6 ЧАСОВ =================
-async def offer_expiration_worker(bot: Bot):
-    while True:
-        await asyncio.sleep(25)
-        try:
-            with sqlite3.connect(DB_NAME) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, chat_id, message_id, business_connection_id, owner_id, nft_url, price, currency, created_at, last_checkpoint
-                    FROM offers WHERE status = 'active'
-                """)
-                active_offers = cursor.fetchall()
-
-            now = datetime.now()
-            for row in active_offers:
-                offer_id, chat_id, message_id, conn_id, owner_id, nft_url_str, price, currency_raw, created_at_str, last_cp = row
-                if not created_at_str or not message_id:
-                    continue
-
-                created_at = datetime.fromisoformat(created_at_str)
-                rem_seconds = (timedelta(hours=OFFER_DURATION_HOURS) - (now - created_at)).total_seconds()
-                lang = get_user_lang(owner_id)
-
-                if rem_seconds <= 0:
-                    with sqlite3.connect(DB_NAME) as conn:
-                        conn.execute("UPDATE offers SET status = 'expired' WHERE id = ?", (offer_id,))
-                        conn.commit()
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            business_connection_id=conn_id,
-                            text=LANGS.get(lang, LANGS["ru"])["expired_text"],
-                            reply_markup=None,
-                            link_preview_options=LinkPreviewOptions(is_disabled=True)
-                        )
-                    except Exception:
-                        pass
-                    continue
-
-                rem_minutes = int(rem_seconds // 60)
-                last_cp = last_cp or 360
-                triggered_cp = None
-
-                for cp in SILENT_EDIT_CHECKPOINTS:
-                    if rem_minutes <= cp < last_cp:
-                        triggered_cp = cp
-                        break
-
-                if triggered_cp is not None:
-                    with sqlite3.connect(DB_NAME) as conn:
-                        conn.execute("UPDATE offers SET last_checkpoint = ? WHERE id = ?", (triggered_cp, offer_id))
-                        conn.commit()
-
-                    receiver_username = get_user_receiver(owner_id)
-                    if not receiver_username:
-                        continue
-
-                    urls = nft_url_str.split(",")
-                    updated_text = build_offer_card_text(owner_id, receiver_username, urls, price, currency_raw, lang, created_at_str)
-                    preview = build_offer_preview_options(owner_id, urls[0])
-                    kb = get_offer_keyboard(offer_id, lang, owner_id)
-
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=message_id,
-                            business_connection_id=conn_id,
-                            text=updated_text,
-                            reply_markup=kb,
-                            link_preview_options=preview
-                        )
-                    except Exception:
-                        pass
-        except Exception as e:
-            logging.error(f"Ошибка воркера таймеров: {e}")
-
-
-# ================= КОМАНДЫ =================
-@router.message(Command("start"))
-async def cmd_start(message: Message):
-    user = message.from_user
-    lang_code = get_user_lang(user.id)
-    receiver = get_user_receiver(user.id, user.username)
-    sub_status = "Активна" if has_active_subscription(user) else "Не активна"
-    rec_line = f"Получатель: <b>@{receiver}</b>" if receiver else f"Получатель: <b>⚠️ Не установлен!</b>\n\n{NO_USERNAME_WARNING_RU}"
-
-    text = (
-        f"<b>Панель управления</b>\n\n"
-        f"ID: <code>{user.id}</code>\n"
-        f"{rec_line}\n"
-        f"Язык: <b>{lang_code.upper()}</b>\n"
-        f"Срок офферов: <b>6 часов</b>\n"
-        f"Подписка: <b>{sub_status}</b>\n\n"
-        f"<code>/tempagifts</code> — активировать доступ\n"
-        f"<code>/setreceiver @username</code> — установить получателя"
-    )
-    await message.answer(text, reply_markup=build_webapp_keyboard(user))
-
-
-@router.message(F.web_app_data)
-async def handle_webapp_data(message: Message, bot: Bot):
-    user = message.from_user
-    try:
-        data = json.loads(message.web_app_data.data)
-        action = data.get("action")
-
-        if "style_preview" in data:
-            save_user_style(
-                user.id,
-                str(data.get("style_preview", "1")),
-                str(data.get("style_layout", "row")),
-                str(data.get("style_icons", "0")),
-                str(data.get("style_pos", "down")),
-                str(data.get("style_template", "default")),
-                str(data.get("style_bold", "0")),
-                str(data.get("custom_accept", "")),
-                str(data.get("custom_decline", ""))
-            )
-
-        if action == "save_settings":
-            new_receiver = data.get("receiver", "").replace("@", "").strip()
-            new_lang = data.get("lang", "ru")
-            if new_lang in ["ru", "en"]:
-                set_user_lang(user.id, new_lang)
-            if not new_receiver:
-                await message.answer(NO_USERNAME_WARNING_RU, reply_markup=build_webapp_keyboard(user))
-                return
-            set_user_receiver(user.id, new_receiver)
-            await message.answer(
-                f"✅ <b>Настройки и кастомизация оффера сохранены!</b>\n"
-                f"Получатель: <b>@{new_receiver}</b>",
-                reply_markup=build_webapp_keyboard(user)
-            )
-
-        elif action == "send_offer":
-            if not has_active_subscription(user):
-                await message.answer("У вас нет активной подписки. Введите <code>/tempagifts</code>.")
-                return
-
-            raw_target = str(data.get("chat_id", "")).strip()
-            conn_id = (data.get("conn_id") or "").strip() or get_owner_default_conn_id(user.id)
-            urls = extract_all_nft_urls(data.get("nft_urls") or data.get("nft_url") or "")
-
-            price = float(data.get("price", 0))
-            currency = data.get("currency", "star")
-            lang = data.get("lang") or get_user_lang(user.id)
-            receiver = (data.get("receiver") or "").replace("@", "").strip() or get_user_receiver(user.id, user.username)
-
-            if not receiver:
-                await message.answer(NO_USERNAME_WARNING_RU, reply_markup=build_webapp_keyboard(user))
-                return
-            if not urls:
-                await message.answer("❌ Не удалось распознать ссылку на подарок.")
-                return
-            if not conn_id:
-                await message.answer("❌ Подключите бота в настройках Telegram Business.")
-                return
-
-            if raw_target.startswith("@") or not raw_target.lstrip("-").isdigit():
-                clean_uname = raw_target.replace("@", "").strip().lower()
-                with sqlite3.connect(DB_NAME) as conn:
-                    row = conn.execute(
-                        "SELECT chat_id, connection_id, title, username FROM business_chats WHERE owner_id = ? AND LOWER(username) = ? LIMIT 1",
-                        (user.id, clean_uname)
-                    ).fetchone()
-                if row:
-                    chat_id = int(row[0])
-                    conn_id = row[1] or conn_id
-                    target_display = f"@{row[3]}" if row[3] else f"{row[2]} (<code>{chat_id}</code>)"
-                else:
-                    chat_obj = await bot.get_chat(f"@{clean_uname}")
-                    chat_id = chat_obj.id
-                    full_name = " ".join(filter(None, [chat_obj.first_name, chat_obj.last_name])) or f"@{clean_uname}"
-                    save_business_chat(chat_id, user.id, conn_id, full_name, clean_uname)
-                    target_display = f"@{clean_uname}"
-            else:
-                chat_id = int(raw_target)
-                target_display = get_chat_recipient_display(user.id, chat_id)
-
-            await send_offer_card_to_chat(bot, chat_id, conn_id, user.id, receiver, urls, price, currency, lang)
-            await send_offer_log_to_bot_dm(bot, user, target_display, receiver, price, currency, urls)
-
-    except Exception as e:
-        logging.error(f"Ошибка WebApp: {e}")
-        await message.answer(f"❌ Ошибка отправки оффера: {e}")
-
-
-@router.business_message(F.text.regexp(r"(?is)^!создать\s+(.+)"))
-async def handle_create_offer(message: Message, bot: Bot):
-    conn_id = message.business_connection_id
-    owner = message.from_user
-    lang = get_user_lang(owner.id)
-
-    if not has_active_subscription(owner):
-        await smart_reply(message, LANGS[lang]["no_sub"])
-        return
-
-    receiver_username = get_user_receiver(owner.id, owner.username)
-    if not receiver_username:
-        await smart_reply(message, NO_USERNAME_WARNING_RU)
-        return
-
-    body = re.sub(r"(?i)^!создать\s+", "", message.text.strip()).strip()
-    tail_match = re.search(r"(\d+(?:[.,]\d+)?)\s+([a-zA-Zа-яА-Я⭐💎$]+)\s*$", body)
-
-    if not tail_match:
-        await smart_reply(message, "❌ Формат: <code>!создать ссылка 500 star</code>")
-        return
-
-    price = float(tail_match.group(1).replace(",", "."))
-    currency_raw = tail_match.group(2)
-    links_part = body[:tail_match.start()].strip()
-
-    urls = extract_all_nft_urls(links_part)
-    if not urls:
-        await smart_reply(message, "❌ Ссылка не найдена. Пример: <code>!создать t.me/nft/DurovsCap-1 500 star</code>")
-        return
-
-    try:
-        try:
-            await bot.delete_business_messages(business_connection_id=conn_id, message_ids=[message.message_id])
-        except Exception:
-            pass
-
-        await send_offer_card_to_chat(bot, message.chat.id, conn_id, owner.id, receiver_username, urls, price, currency_raw, lang)
-
-        target_display = f"@{message.chat.username}" if message.chat.username else f"<code>{message.chat.id}</code>"
-        await send_offer_log_to_bot_dm(bot, owner, target_display, receiver_username, price, currency_raw, urls)
-    except Exception as e:
-        await smart_reply(message, f"❌ Ошибка: {e}")
-
-
-# ================= КНОПКИ И ПРОВЕРКА =================
-@router.callback_query(F.data.startswith("offer_accept:"))
-async def cb_accept_offer(call: CallbackQuery):
-    parts = call.data.split(":")
-    offer_id = int(parts[1])
-    lang = parts[2] if len(parts) > 2 else "ru"
-    t = LANGS[lang]
-
-    offer = get_offer_by_id(offer_id)
-    if not offer or offer[10] != 'active':
-        await call.answer("Оффер неактивен", show_alert=True)
-        return
-
-    owner_id = offer[4]
-    urls = offer[5].split(",")
-    price = int(offer[7]) if float(offer[7]).is_integer() else offer[7]
-    receiver_username = get_user_receiver(owner_id)
-    if not receiver_username:
-        await call.answer("⚠️ У получателя не установлен @username! Без него NFT сгорит.", show_alert=True)
-        return
-
-    curr_display = render_currency(offer[8])
-    gifts_list = render_gifts_list_html(urls)
-    preview = build_offer_preview_options(owner_id, urls[0])
-
-    text = t["accepted_step2"].format(icon="✅", receiver=receiver_username, gifts_list=gifts_list, price=price, curr=curr_display)
-    await call.message.edit_text(text=text, reply_markup=get_confirm_keyboard(offer_id, lang), link_preview_options=preview)
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("offer_confirm:"))
-async def cb_confirm_offer(call: CallbackQuery):
-    parts = call.data.split(":")
-    offer_id = int(parts[1])
-    lang = parts[2] if len(parts) > 2 else "ru"
-    t = LANGS[lang]
-
-    offer = get_offer_by_id(offer_id)
-    if not offer:
-        return
-
-    owner_id = offer[4]
-    urls = offer[5].split(",")
-    price = int(offer[7]) if float(offer[7]).is_integer() else offer[7]
-    receiver_username = get_user_receiver(owner_id)
-    if not receiver_username:
-        await call.answer("⚠️ У получателя не установлен @username! Без него NFT сгорит.", show_alert=True)
-        return
-
-    curr_display = render_currency(offer[8])
-    gift_link = f"tg://send_gift?to={receiver_username}"
-    gifts_list = render_gifts_list_html(urls)
-    preview = build_offer_preview_options(owner_id, urls[0])
-
-    text = t["sold_text"].format(icon="✅", gifts_list=gifts_list, price=price, curr=curr_display, gift_link=gift_link, receiver=receiver_username)
-    await call.message.edit_text(text=text, reply_markup=get_transfer_keyboard(offer_id, lang, receiver_username), link_preview_options=preview)
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("verify_gift:"))
-async def cb_verify_gift(call: CallbackQuery):
-    parts = call.data.split(":")
-    offer_id = int(parts[1])
-    lang = parts[2] if len(parts) > 2 else "ru"
-    t = LANGS[lang]
-
-    offer = get_offer_by_id(offer_id)
-    if not offer:
-        return
-
-    owner_id = offer[4]
-    urls = offer[5].split(",")
-    price = int(offer[7]) if float(offer[7]).is_integer() else offer[7]
-    receiver_username = get_user_receiver(owner_id)
-    curr_display = render_currency(offer[8])
-    gift_link = f"tg://send_gift?to={receiver_username}"
-    preview = build_offer_preview_options(owner_id, urls[0])
-
-    all_received, missing = await verify_all_gifts_received(urls, receiver_username, offer[11])
-
-    if not all_received:
-        missing_str = "\n".join([f"• <b>{m}</b>" for m in missing])
-        text = t["not_sent_menu"].format(receiver=receiver_username, missing=missing_str, gift_link=gift_link)
-        try:
-            await call.message.edit_text(text=text, reply_markup=get_transfer_keyboard(offer_id, lang, receiver_username), link_preview_options=preview)
-        except Exception:
-            pass
-        await call.answer(t["not_sent_alert"].format(missing=", ".join(missing)), show_alert=True)
-        return
-
-    mark_offer_completed(offer_id)
-    gifts_list = render_gifts_list_html(urls)
-    completed_text = t["deal_completed_menu"].format(icon="✅", id=offer_id, gifts_list=gifts_list, receiver=receiver_username, price=price, curr=curr_display)
-    await call.message.edit_text(text=completed_text, reply_markup=None, link_preview_options=preview)
-    await call.answer("Все подарки подтверждены! Сделка завершена.", show_alert=True)
-
-
-@router.callback_query(F.data.startswith("offer_back:"))
-async def cb_back_offer(call: CallbackQuery):
-    parts = call.data.split(":")
-    offer_id = int(parts[1])
-    lang = parts[2] if len(parts) > 2 else "ru"
-
-    offer = get_offer_by_id(offer_id)
-    if not offer or offer[10] != 'active':
-        await call.answer("Оффер неактивен", show_alert=True)
-        return
-
-    owner_id = offer[4]
-    urls = offer[5].split(",")
-    price = offer[7]
-    currency_raw = offer[8]
-    created_at_str = offer[9]
-    receiver_username = get_user_receiver(owner_id)
-
-    text = build_offer_card_text(owner_id, receiver_username, urls, price, currency_raw, lang, created_at_str)
-    preview = build_offer_preview_options(owner_id, urls[0])
-    kb = get_offer_keyboard(offer_id, lang, owner_id)
-
-    await call.message.edit_text(text=text, reply_markup=kb, link_preview_options=preview)
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("offer_decline:"))
-async def cb_decline_offer(call: CallbackQuery):
-    parts = call.data.split(":")
-    lang = parts[2] if len(parts) > 2 else "ru"
-    await call.message.edit_text(text=LANGS[lang]["declined"].format(icon="❌"), reply_markup=None, link_preview_options=LinkPreviewOptions(is_disabled=True))
-    await call.answer(LANGS[lang]["declined_alert"], show_alert=True)
-
-
-@router.callback_query(F.data.startswith("how_to_transfer"))
-async def cb_how_to(call: CallbackQuery):
-    parts = call.data.split(":")
-    receiver = parts[2] if len(parts) > 2 else ""
-    msg = f"1. Нажмите «Передать NFT»\n2. Отправьте все указанные подарки на @{receiver}\n3. Нажмите «Я отправил подарки»"
-    await call.answer(msg, show_alert=True)
-
-
-@router.message(Command("tempagifts"))
-@router.business_message(Command("tempagifts"))
-async def cmd_temp(message: Message):
-    exp = add_subscription(message.from_user.id, 30)
-    rec = get_user_receiver(message.from_user.id, message.from_user.username)
-    warn = "" if rec else f"\n\n{NO_USERNAME_WARNING_RU}"
-    await smart_reply(message, f"✅ Доступ активен до {exp.strftime('%d.%m.%Y %H:%M')}{warn}")
-
-
-@router.message(Command("setreceiver"))
-@router.business_message(Command("setreceiver"))
-async def cmd_setrec(message: Message, command: CommandObject):
-    if not command.args:
-        await smart_reply(message, NO_USERNAME_WARNING_RU)
-        return
-    u = command.args.split()[0].replace("@", "").strip()
-    set_user_receiver(message.from_user.id, u)
-    await smart_reply(message, f"✅ Получатель подарков: <b>@{u}</b>")
-
-
-@router.message(Command("sub"))
-async def cmd_sub(message: Message, command: CommandObject):
-    if not is_admin(message.from_user):
-        return
-    args = command.args.split() if command.args else []
-    if len(args) == 2 and args[0].isdigit() and args[1].isdigit():
-        exp = add_subscription(int(args[0]), int(args[1]))
-        await smart_reply(message, f"✅ Подписка для <code>{args[0]}</code> до {exp.strftime('%d.%m.%Y %H:%M')}")
-
-
-@router.message(Command("unsub"))
-async def cmd_unsub(message: Message, command: CommandObject):
-    if not is_admin(message.from_user):
-        return
-    if command.args and command.args.isdigit():
-        remove_subscription(int(command.args))
-        await smart_reply(message, f"✅ Подписка <code>{command.args}</code> отключена.")
-
-
-@router.business_connection()
-async def on_bconn(c: BusinessConnection):
-    save_business_connection(c.id, c.user.id, c.rights.can_reply if c.rights else True)
-
-
-async def main():
-    init_db()
-    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher()
-    router.business_message.outer_middleware(BusinessChatTrackerMiddleware())
-    router.edited_business_message.outer_middleware(BusinessChatTrackerMiddleware())
-    dp.include_router(router)
-    await bot.delete_webhook(drop_pending_updates=False)
-    asyncio.create_task(offer_expiration_worker(bot))
-    print(f"Бот запущен (таймер 6ч) | Mini App: {WEBAPP_URL}")
-    try:
-        await dp.start_polling(
-            bot,
-            allowed_updates=[
-                "message",
-                "business_connection",
-                "business_message",
-                "edited_business_message",
-                "deleted_business_messages",
-                "callback_query"
-            ]
-        )
-    finally:
-        await bot.session.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>@steknft</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg: #050505;
+            --card-bg: rgba(255, 255, 255, 0.04);
+            --card-border: rgba(255, 255, 255, 0.09);
+            --card-highlight: rgba(255, 255, 255, 0.2);
+            --input-bg: rgba(255, 255, 255, 0.035);
+            --text: #ffffff;
+            --subtext: #86868b;
+            --warn-bg: rgba(255, 69, 58, 0.12);
+            --warn-border: rgba(255, 69, 58, 0.35);
+            --warn-text: #ff6961;
+            --tg-bubble: #212d3b;
+            --tg-link: #64b5ef;
+            --tg-accent: #e58f7c;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+            -webkit-touch-callout: none;
+        }
+
+        html, body {
+            overscroll-behavior: none;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: max(14px, env(safe-area-inset-top)) 16px max(110px, env(safe-area-inset-bottom) + 95px) 16px;
+            overflow-x: hidden;
+            letter-spacing: -0.015em;
+        }
+
+        .profile-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            margin-bottom: 14px;
+            background: var(--card-bg);
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
+            border: 1px solid var(--card-border);
+            border-top-color: var(--card-highlight);
+            border-radius: 20px;
+        }
+
+        .profile-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .profile-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 16px;
+            overflow: hidden;
+            color: #fff;
+        }
+
+        .profile-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .profile-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .profile-username {
+            font-size: 12px;
+            color: var(--subtext);
+        }
+
+        .brand-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 99px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            color: #fff;
+            cursor: pointer;
+        }
+
+        .burn-warning {
+            display: none;
+            background: var(--warn-bg);
+            border: 1px solid var(--warn-border);
+            border-radius: 18px;
+            padding: 13px 15px;
+            margin-bottom: 14px;
+            font-size: 13px;
+            line-height: 1.45;
+            color: var(--warn-text);
+        }
+
+        .burn-warning.visible { display: block; }
+
+        .tab-view {
+            display: none;
+            animation: fadeIn 0.2s ease;
+        }
+
+        .tab-view.active { display: block; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .glass-card {
+            position: relative;
+            background: var(--card-bg);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border: 1px solid var(--card-border);
+            border-top-color: var(--card-highlight);
+            border-radius: 22px;
+            padding: 16px;
+            margin-bottom: 14px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+        }
+
+        .section-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--subtext);
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .sub-label {
+            font-size: 12px;
+            color: #a1a1a6;
+            margin: 12px 0 6px 0;
+            font-weight: 500;
+        }
+
+        .hint-sub {
+            font-size: 11px;
+            color: #55555a;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .restore-link {
+            color: #86868b;
+            text-decoration: underline;
+            cursor: pointer;
+            display: none;
+        }
+
+        .glass-input-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .two-cols-inputs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .prefix {
+            position: absolute;
+            left: 14px;
+            color: var(--subtext);
+            font-weight: 600;
+        }
+
+        .glass-input, .glass-textarea {
+            width: 100%;
+            background: var(--input-bg);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: var(--text);
+            padding: 12px 13px;
+            border-radius: 14px;
+            font-size: 13.5px;
+            outline: none;
+            user-select: text;
+        }
+
+        .glass-textarea {
+            resize: none;
+            height: 72px;
+            line-height: 1.4;
+        }
+
+        .glass-input.has-prefix { padding-left: 32px; }
+        .glass-input:focus, .glass-textarea:focus { border-color: rgba(255, 255, 255, 0.35); }
+
+        .tg-mockup-wrap {
+            background: #0f161e;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 18px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+
+        .tg-bubble {
+            background: var(--tg-bubble);
+            border-radius: 14px 14px 14px 4px;
+            padding: 10px 12px;
+            font-size: 13.5px;
+            line-height: 1.4;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            word-break: break-word;
+        }
+
+        .tg-link {
+            color: var(--tg-link);
+            text-decoration: none;
+        }
+
+        .tg-embed-card {
+            border-left: 3px solid var(--tg-accent);
+            background: rgba(229, 143, 124, 0.08);
+            border-radius: 4px 10px 10px 4px;
+            padding: 8px 10px;
+            font-weight: 400;
+        }
+
+        .tg-embed-site {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--tg-accent);
+        }
+
+        .tg-embed-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 6px;
+        }
+
+        .tg-embed-art {
+            width: 100%;
+            height: 115px;
+            border-radius: 10px;
+            background: radial-gradient(circle at center, #e59378 0%, #c46d53 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 44px;
+            margin-bottom: 8px;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.2);
+        }
+
+        .tg-embed-show-btn {
+            text-align: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--tg-accent);
+            letter-spacing: 0.4px;
+            padding-top: 2px;
+        }
+
+        .tg-inline-kb {
+            display: grid;
+            gap: 5px;
+            margin-top: 5px;
+        }
+
+        .tg-inline-kb.row-mode {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .tg-inline-kb.col-mode {
+            grid-template-columns: 1fr;
+        }
+
+        .tg-inline-btn {
+            background: rgba(33, 45, 59, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 9px;
+            padding: 9px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .live-preview-box {
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 12px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 15px;
+        }
+
+        .live-preview-box.visible { display: flex; }
+
+        .live-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 13px;
+            padding: 6px 8px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .live-item-name { font-weight: 600; color: #fff; }
+        .live-tag {
+            font-size: 10px;
+            font-weight: 700;
+            color: #34c759;
+            background: rgba(52, 199, 89, 0.14);
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+
+        .liquid-track {
+            position: relative;
+            display: grid;
+            background: rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 14px;
+            padding: 4px;
+            height: 42px;
+        }
+
+        .liquid-track.cols-2 { grid-template-columns: 1fr 1fr; }
+        .liquid-track.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+        .liquid-thumb {
+            position: absolute;
+            top: 4px; bottom: 4px; left: 4px;
+            background: rgba(255, 255, 255, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            border-radius: 10px;
+            transition: transform 0.28s ease;
+            pointer-events: none;
+        }
+
+        .liquid-option {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--subtext);
+            cursor: pointer;
+            z-index: 2;
+        }
+
+        .liquid-option.active { color: #ffffff; }
+
+        .chats-vertical-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 230px;
+            overflow-y: auto;
+        }
+
+        .chat-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 10px 14px;
+            border-radius: 14px;
+            cursor: pointer;
+            transition: transform 0.2s ease, background 0.2s ease;
+        }
+
+        .chat-row.selected {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.35);
+        }
+
+        .chat-row.holding {
+            transform: scale(0.96);
+            background: rgba(255, 69, 58, 0.16);
+            border-color: rgba(255, 69, 58, 0.45);
+        }
+
+        .chat-avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.09);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            color: #fff;
+            margin-right: 10px;
+        }
+
+        .chat-title { font-size: 13px; font-weight: 600; color: #fff; }
+        .chat-user { font-size: 11px; color: var(--subtext); }
+
+        .empty-chats {
+            font-size: 12px;
+            color: var(--subtext);
+            text-align: center;
+            padding: 16px 8px;
+        }
+
+        .btn-main {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.13);
+            backdrop-filter: blur(20px);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            padding: 14px;
+            border-radius: 16px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 12px;
+        }
+
+        .btn-main:active { transform: scale(0.98); }
+
+        .btn-reset {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--subtext);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 11px;
+            border-radius: 14px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 8px;
+        }
+
+        .btn-reset:active { transform: scale(0.98); }
+
+        .bottom-dock-wrap {
+            position: fixed;
+            bottom: 16px; left: 16px; right: 16px;
+            display: flex;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        .bottom-dock {
+            width: 100%;
+            max-width: 380px;
+            height: 64px;
+            background: rgba(16, 16, 18, 0.88);
+            backdrop-filter: blur(32px);
+            -webkit-backdrop-filter: blur(32px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-top-color: rgba(255, 255, 255, 0.24);
+            border-radius: 999px;
+            padding: 4px;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            position: relative;
+            box-shadow: 0 14px 36px rgba(0, 0, 0, 0.8);
+        }
+
+        .dock-pill {
+            position: absolute;
+            top: 4px; bottom: 4px; left: 4px;
+            background: rgba(255, 255, 255, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.26);
+            border-radius: 999px;
+            transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        .dock-tab {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+            cursor: pointer;
+            color: var(--subtext);
+            z-index: 2;
+            transition: color 0.2s;
+        }
+
+        .dock-tab.active { color: #ffffff; }
+        .dock-icon {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+        .dock-label { font-size: 11px; font-weight: 600; }
+    </style>
+</head>
+<body>
+
+    <div class="profile-bar">
+        <div class="profile-left">
+            <div class="profile-avatar" id="userAvatar">?</div>
+            <div>
+                <div class="profile-name" id="userName">Загрузка...</div>
+                <div class="profile-username" id="userUname">@username</div>
+            </div>
+        </div>
+        <div class="brand-badge" onclick="openChannel()">@steknft</div>
+    </div>
+
+    <div class="burn-warning" id="burnWarningBox">
+        ⚠️ <b>Необходимо установить юзернейм!</b><br>
+        Если не указать <b>@username</b> во вкладке «Настройки», переданные NFT безвозвратно сгорят!
+    </div>
+
+    <!-- ВКЛАДКА 1: ЧАТЫ И ОТПРАВКА ОФФЕРА -->
+    <div id="view-chats" class="tab-view active">
+        <div class="glass-card">
+            <div class="section-label">
+                <span>Личные чаты</span>
+                <span id="selectedChatBadge" style="color: #fff;">Не выбран</span>
+            </div>
+            <div class="hint-sub">
+                <span>Зажмите контакт для удаления</span>
+                <span class="restore-link" id="restoreBtn" onclick="restoreHiddenChats()">Вернуть скрытые</span>
+            </div>
+            <div class="glass-input-wrap" style="margin-bottom: 8px;">
+                <input type="text" id="chatSearchInput" class="glass-input" placeholder="Поиск по @username или имени..." oninput="filterChats()">
+            </div>
+            <div class="chats-vertical-list" id="chatsContainer"></div>
+        </div>
+
+        <div class="glass-card">
+            <div class="section-label">
+                <span>Отправка оффера (6 часов)</span>
+                <span id="lotsCountBadge" style="color: #34c759;">0 лотов</span>
+            </div>
+
+            <div class="glass-input-wrap">
+                <textarea id="chatNftUrl" class="glass-textarea" placeholder="Вставьте одну или несколько ссылок&#10;t.me/nft/KissedFrog-940" oninput="onGiftsInput()"></textarea>
+            </div>
+
+            <div class="live-preview-box" id="livePreviewBox"></div>
+
+            <div class="glass-input-wrap" style="margin-bottom: 12px;">
+                <input type="number" id="chatNftPrice" class="glass-input" placeholder="Сумма" value="5000">
+            </div>
+
+            <div class="liquid-track cols-3" id="chatCurrSwitch" data-value="star">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="star">Stars</div>
+                <div class="liquid-option" data-val="gram">GRAM</div>
+                <div class="liquid-option" data-val="usdt">USDT</div>
+            </div>
+
+            <button class="btn-main" onclick="sendOfferDirect()">Отправить оффер</button>
+        </div>
+    </div>
+
+    <!-- ВКЛАДКА 2: КАСТОМИЗАЦИЯ ОФФЕРА -->
+    <div id="view-offer" class="tab-view">
+        <div class="glass-card">
+            <div class="section-label">
+                <span>Предпросмотр оффера</span>
+                <span style="color: #34c759;">Таймер: 6ч</span>
+            </div>
+
+            <div class="tg-mockup-wrap">
+                <div class="tg-bubble" id="mockBubble"></div>
+                <div class="tg-inline-kb row-mode" id="mockKeyboard"></div>
+            </div>
+
+            <div class="sub-label">Вариант текста оффера</div>
+            <div class="liquid-track cols-2" id="templateSwitch" data-value="default">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="default">Default</div>
+                <div class="liquid-option" data-val="original">Original</div>
+            </div>
+
+            <div class="sub-label">Стиль шрифта текста</div>
+            <div class="liquid-track cols-2" id="boldSwitch" data-value="0">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="0">Default</div>
+                <div class="liquid-option" data-val="1">Жирный</div>
+            </div>
+
+            <div class="sub-label">Расположение кнопок</div>
+            <div class="liquid-track cols-2" id="layoutSwitch" data-value="row">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="row">Рядом</div>
+                <div class="liquid-option" data-val="col">Друг над другом</div>
+            </div>
+
+            <div class="sub-label">Свой текст на кнопках (необязательно)</div>
+            <div class="two-cols-inputs">
+                <input type="text" id="customAcceptInput" class="glass-input" placeholder="Принять" maxlength="24" oninput="updateOfferMockup()">
+                <input type="text" id="customDeclineInput" class="glass-input" placeholder="Отклонить" maxlength="24" oninput="updateOfferMockup()">
+            </div>
+
+            <div class="sub-label">Иконки на кнопках</div>
+            <div class="liquid-track cols-2" id="iconsSwitch" data-value="0">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="0">Чистый текст</div>
+                <div class="liquid-option" data-val="1">С иконками ✅ ❌</div>
+            </div>
+
+            <div class="sub-label">Превью «ПОКАЗАТЬ ПОДАРОК»</div>
+            <div class="liquid-track cols-2" id="previewSwitch" data-value="1">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="1">Показать подарок</div>
+                <div class="liquid-option" data-val="0">Скрыть превью</div>
+            </div>
+
+            <div class="sub-label">Позиция картинки подарка</div>
+            <div class="liquid-track cols-2" id="posSwitch" data-value="down">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="down">Под текстом</div>
+                <div class="liquid-option" data-val="up">Над текстом</div>
+            </div>
+
+            <button class="btn-main" onclick="saveSettings()">Сохранить вид оффера</button>
+            <button class="btn-reset" onclick="resetOfferStyle()">Сбросить вид по умолчанию</button>
+        </div>
+    </div>
+
+    <!-- ВКЛАДКА 3: ОСНОВНЫЕ НАСТРОЙКИ -->
+    <div id="view-settings" class="tab-view">
+        <div class="glass-card">
+            <div class="section-label">Юзернейм получателя подарков</div>
+            <div class="glass-input-wrap">
+                <span class="prefix">@</span>
+                <input type="text" id="receiverInput" class="glass-input has-prefix" placeholder="username" oninput="checkWarning(); updateOfferMockup();">
+            </div>
+
+            <div class="sub-label">Язык карточек</div>
+            <div class="liquid-track cols-2" id="langSwitch" data-value="ru">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="ru">Русский</div>
+                <div class="liquid-option" data-val="en">English</div>
+            </div>
+
+            <button class="btn-main" onclick="saveSettings()">Сохранить настройки</button>
+        </div>
+    </div>
+
+    <!-- Нижний док на 3 страницы: Чаты | Оффер | Настройки -->
+    <div class="bottom-dock-wrap">
+        <div class="bottom-dock" id="bottomDock">
+            <div class="dock-pill" id="dockPill"></div>
+
+            <div class="dock-tab active" onclick="switchDock(0)">
+                <svg class="dock-icon" viewBox="0 0 24 24">
+                    <path d="M12 3C6.5 3 2 6.58 2 11c0 2.13 1.05 4.07 2.75 5.5-.15.95-.6 2.18-1.46 3.12-.23.25-.03.65.3.61 1.74-.22 3.32-.88 4.45-1.55C9.28 19.01 10.61 19.2 12 19.2c5.5 0 10-3.58 10-8.2S17.5 3 12 3z"/>
+                </svg>
+                <span class="dock-label">Чаты</span>
+            </div>
+
+            <div class="dock-tab" onclick="switchDock(1)">
+                <svg class="dock-icon" viewBox="0 0 24 24">
+                    <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/>
+                </svg>
+                <span class="dock-label">Оффер</span>
+            </div>
+
+            <div class="dock-tab" onclick="switchDock(2)">
+                <svg class="dock-icon" viewBox="0 0 24 24">
+                    <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                </svg>
+                <span class="dock-label">Настройки</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+        tg.ready();
+
+        function hapticImpact(s = 'light') { if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred(s); }
+        function hapticNotify(t = 'success') { if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred(t); }
+        function hapticSelect() { if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged(); }
+        function openChannel() {
+            if (tg.openTelegramLink) tg.openTelegramLink('https://t.me/steknft');
+            else window.open('https://t.me/steknft', '_blank');
+        }
+
+        const u = tg.initDataUnsafe?.user;
+        if (u) {
+            document.getElementById('userName').innerText = (u.first_name + ' ' + (u.last_name || '')).trim();
+            document.getElementById('userUname').innerText = u.username ? '@' + u.username : 'ID: ' + u.id;
+            const av = document.getElementById('userAvatar');
+            if (u.photo_url) av.innerHTML = `<img src="${u.photo_url}">`;
+            else av.innerText = (u.first_name || '?')[0].toUpperCase();
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const rawChats = params.get('chats');
+        const defaultCid = params.get('dcid') || '';
+        document.getElementById('receiverInput').value = params.get('receiver') || (u?.username || '');
+
+        const initLang = params.get('lang') || 'ru';
+        const initPrev = params.get('sprev') || localStorage.getItem('st_prev') || '1';
+        const initLay = params.get('slay') || localStorage.getItem('st_lay') || 'row';
+        const initIco = params.get('sico') || localStorage.getItem('st_ico') || '0';
+        const initPos = params.get('spos') || localStorage.getItem('st_pos') || 'down';
+        let initTpl = params.get('stpl') || localStorage.getItem('st_tpl') || 'default';
+        if (initTpl !== 'original') initTpl = 'default';
+        const initBold = params.get('sbold') || localStorage.getItem('st_bold') || '0';
+
+        const initAcc = params.get('sacc') || localStorage.getItem('st_acc') || '';
+        const initDec = params.get('sdec') || localStorage.getItem('st_dec') || '';
+
+        document.getElementById('customAcceptInput').value = initAcc;
+        document.getElementById('customDeclineInput').value = initDec;
+
+        const switchControllers = {};
+
+        function initSwitch(id, defaultVal, onChange) {
+            const track = document.getElementById(id);
+            const thumb = track.querySelector('.liquid-thumb');
+            const opts = track.querySelectorAll('.liquid-option');
+            let idx = Array.from(opts).findIndex(o => o.dataset.val === String(defaultVal));
+            if (idx < 0) idx = 0;
+
+            function set(i) {
+                idx = i;
+                track.dataset.value = opts[i].dataset.val;
+                const w = (track.clientWidth - 8) / opts.length;
+                if (w > 0) {
+                    thumb.style.width = w + 'px';
+                    thumb.style.transform = `translateX(${i * w}px)`;
+                }
+                opts.forEach((o, k) => o.classList.toggle('active', k === i));
+                if (onChange) onChange(track.dataset.value);
+            }
+
+            opts.forEach((o, i) => o.onclick = () => { hapticSelect(); set(i); });
+            window.addEventListener('resize', () => set(idx));
+            setTimeout(() => set(idx), 25);
+
+            switchControllers[id] = (val) => {
+                const targetIdx = Array.from(opts).findIndex(o => o.dataset.val === String(val));
+                if (targetIdx >= 0) set(targetIdx);
+            };
+        }
+
+        initSwitch('langSwitch', initLang, updateOfferMockup);
+        initSwitch('templateSwitch', initTpl, updateOfferMockup);
+        initSwitch('boldSwitch', initBold, updateOfferMockup);
+        initSwitch('previewSwitch', initPrev, updateOfferMockup);
+        initSwitch('layoutSwitch', initLay, updateOfferMockup);
+        initSwitch('iconsSwitch', initIco, updateOfferMockup);
+        initSwitch('posSwitch', initPos, updateOfferMockup);
+        initSwitch('chatCurrSwitch', 'star');
+
+        function resetOfferStyle() {
+            hapticImpact('medium');
+            document.getElementById('customAcceptInput').value = '';
+            document.getElementById('customDeclineInput').value = '';
+            if (switchControllers['templateSwitch']) switchControllers['templateSwitch']('default');
+            if (switchControllers['boldSwitch']) switchControllers['boldSwitch']('0');
+            if (switchControllers['layoutSwitch']) switchControllers['layoutSwitch']('row');
+            if (switchControllers['iconsSwitch']) switchControllers['iconsSwitch']('0');
+            if (switchControllers['previewSwitch']) switchControllers['previewSwitch']('1');
+            if (switchControllers['posSwitch']) switchControllers['posSwitch']('down');
+            updateOfferMockup();
+        }
+
+        function updateOfferMockup() {
+            const rec = document.getElementById('receiverInput').value.replace('@', '').trim() || 'username';
+            const lang = document.getElementById('langSwitch').dataset.value || 'ru';
+            const tpl = document.getElementById('templateSwitch').dataset.value || 'default';
+            const isBold = document.getElementById('boldSwitch').dataset.value === '1';
+            const showPrev = document.getElementById('previewSwitch').dataset.value === '1';
+            const layout = document.getElementById('layoutSwitch').dataset.value || 'row';
+            const useIcons = document.getElementById('iconsSwitch').dataset.value === '1';
+            const pos = document.getElementById('posSwitch').dataset.value || 'down';
+
+            const customAcc = document.getElementById('customAcceptInput').value.trim();
+            const customDec = document.getElementById('customDeclineInput').value.trim();
+
+            const bubble = document.getElementById('mockBubble');
+            const kb = document.getElementById('mockKeyboard');
+
+            const weightStyle = isBold ? 'font-weight: 700;' : '';
+
+            let textHtml = '';
+            if (tpl === 'original') {
+                textHtml = lang === 'en'
+                    ? `<div style="${weightStyle}">User (<span class="tg-link">@${rec}</span>) offers you 5000 ⭐ for gift <span class="tg-link">https://t.me/nft/KissedFrog-940</span><br><br>Remaining: 5h 59m</div>`
+                    : `<div style="${weightStyle}">Пользователь (<span class="tg-link">@${rec}</span>) предлагает вам 5000 ⭐ за подарок <span class="tg-link">https://t.me/nft/KissedFrog-940</span><br><br>Осталось: 5h 59m</div>`;
+            } else {
+                textHtml = lang === 'en'
+                    ? `<div style="${weightStyle}">You have an offer from <span class="tg-link">@${rec}</span><br><b>5000 ⭐</b> for gift<br><span class="tg-link">KissedFrog #940</span><br><br>Remaining: <b>5h 59m</b></div>`
+                    : `<div style="${weightStyle}">Вам предлагает оффер <span class="tg-link">@${rec}</span><br><b>5000 ⭐</b> за подарок<br><span class="tg-link">KissedFrog #940</span><br><br>Осталось: <b>5h 59m</b></div>`;
+            }
+
+            const embedHtml = showPrev ? `
+                <div class="tg-embed-card">
+                    <div class="tg-embed-site">Telegram</div>
+                    <div class="tg-embed-title">Kissed Frog #940</div>
+                    <div class="tg-embed-art">🐸</div>
+                    <div class="tg-embed-show-btn">${lang === 'en' ? 'VIEW GIFT' : 'ПОКАЗАТЬ ПОДАРОК'}</div>
+                </div>
+            ` : '';
+
+            bubble.innerHTML = pos === 'up' ? (embedHtml + textHtml) : (textHtml + embedHtml);
+
+            kb.className = 'tg-inline-kb ' + (layout === 'col' ? 'col-mode' : 'row-mode');
+            const baseDec = customDec || (lang === 'en' ? 'Decline' : 'Отклонить');
+            const baseAcc = customAcc || (lang === 'en' ? 'Accept' : 'Принять');
+
+            const decWord = (useIcons ? '❌ ' : '') + baseDec;
+            const accWord = (useIcons ? '✅ ' : '') + baseAcc;
+
+            if (layout === 'col') {
+                kb.innerHTML = `
+                    <div class="tg-inline-btn">${accWord}</div>
+                    <div class="tg-inline-btn">${decWord}</div>
+                `;
+            } else {
+                kb.innerHTML = `
+                    <div class="tg-inline-btn">${decWord}</div>
+                    <div class="tg-inline-btn">${accWord}</div>
+                `;
+            }
+        }
+
+        let currentDockIdx = 0;
+        function switchDock(idx) {
+            hapticSelect();
+            currentDockIdx = idx;
+            const dock = document.getElementById('bottomDock');
+            const pill = document.getElementById('dockPill');
+            const w = (dock.clientWidth - 8) / 3;
+            pill.style.width = w + 'px';
+            pill.style.transform = `translateX(${idx * w}px)`;
+
+            document.querySelectorAll('.dock-tab').forEach((t, i) => t.classList.toggle('active', i === idx));
+            document.getElementById('view-chats').classList.toggle('active', idx === 0);
+            document.getElementById('view-offer').classList.toggle('active', idx === 1);
+            document.getElementById('view-settings').classList.toggle('active', idx === 2);
+            window.dispatchEvent(new Event('resize'));
+        }
+        window.addEventListener('resize', () => switchDock(currentDockIdx));
+        setTimeout(() => { switchDock(0); updateOfferMockup(); }, 30);
+
+        function parseUrls(text) {
+            if (!text) return [];
+            const valid = [];
+            const regex = /(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/nft\/([a-zA-Z0-9_-]+)/gi;
+            let m;
+            while ((m = regex.exec(text)) !== null) {
+                const norm = 'https://t.me/nft/' + m[1];
+                if (!valid.includes(norm)) valid.push(norm);
+            }
+            if (valid.length === 0) {
+                text.split(/[\s,;\n]+/).forEach(token => {
+                    const clean = token.trim();
+                    if (/^[a-zA-Z0-9_-]+-\d+$/.test(clean)) {
+                        const norm = 'https://t.me/nft/' + clean;
+                        if (!valid.includes(norm)) valid.push(norm);
+                    }
+                });
+            }
+            return valid;
+        }
+
+        let currentGifts = [];
+        function onGiftsInput() {
+            const val = document.getElementById('chatNftUrl').value;
+            currentGifts = parseUrls(val);
+            const box = document.getElementById('livePreviewBox');
+            const badge = document.getElementById('lotsCountBadge');
+
+            badge.innerText = `${currentGifts.length} лотов`;
+
+            if (currentGifts.length === 0) {
+                box.classList.remove('visible');
+                box.innerHTML = '';
+                return;
+            }
+
+            box.classList.add('visible');
+            box.innerHTML = currentGifts.map(url => {
+                const slug = url.split('/nft/')[1] || url;
+                const lastDash = slug.lastIndexOf('-');
+                const name = lastDash > 0 ? slug.slice(0, lastDash) + ' #' + slug.slice(lastDash + 1) : slug;
+                return `
+                    <div class="live-item">
+                        <span class="live-item-name">${name}</span>
+                        <span class="live-tag">Распознан</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        const HIDDEN_KEY = 'steknft_hidden_chats';
+        function getHiddenIds() {
+            try { return JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]'); }
+            catch (e) { return []; }
+        }
+        function addHiddenId(id) {
+            const list = getHiddenIds();
+            const strId = String(id);
+            if (!list.includes(strId)) {
+                list.push(strId);
+                localStorage.setItem(HIDDEN_KEY, JSON.stringify(list));
+            }
+            updateRestoreBtn();
+        }
+        function restoreHiddenChats() {
+            hapticImpact('medium');
+            localStorage.removeItem(HIDDEN_KEY);
+            updateRestoreBtn();
+            filterChats();
+        }
+        function updateRestoreBtn() {
+            const hidden = getHiddenIds();
+            const btn = document.getElementById('restoreBtn');
+            btn.style.display = hidden.length > 0 ? 'inline' : 'none';
+            if (hidden.length > 0) btn.innerText = `Вернуть скрытые (${hidden.length})`;
+        }
+
+        function checkWarning() {
+            const v = document.getElementById('receiverInput').value.trim();
+            document.getElementById('burnWarningBox').classList.toggle('visible', !v);
+        }
+        checkWarning();
+        updateRestoreBtn();
+
+        let allChatsList = [];
+        let selectedChat = null;
+
+        if (rawChats) {
+            try {
+                const clean = rawChats.replace(/-/g, '+').replace(/_/g, '/');
+                const binStr = atob(clean);
+                const bytes = Uint8Array.from(binStr, c => c.charCodeAt(0));
+                allChatsList = JSON.parse(new TextDecoder().decode(bytes));
+            } catch (e) {}
+        }
+
+        function getVisibleChats() {
+            const hidden = getHiddenIds();
+            return allChatsList.filter(c => !hidden.includes(String(c.id)));
+        }
+
+        function bindLongPressDelete(rowElement, chatItem) {
+            let pressTimer = null;
+            let longPressed = false;
+
+            const startPress = () => {
+                longPressed = false;
+                rowElement.classList.add('holding');
+                pressTimer = setTimeout(() => {
+                    longPressed = true;
+                    rowElement.classList.remove('holding');
+                    hapticImpact('heavy');
+
+                    const confirmMsg = `Удалить контакт «${chatItem.t}» из списка?`;
+                    if (tg.showConfirm) {
+                        tg.showConfirm(confirmMsg, (ok) => {
+                            if (ok) removeContact(chatItem);
+                        });
+                    } else if (confirm(confirmMsg)) {
+                        removeContact(chatItem);
+                    }
+                }, 550);
+            };
+
+            const cancelPress = () => {
+                rowElement.classList.remove('holding');
+                if (pressTimer) {
+                    clearTimeout(pressTimer);
+                    pressTimer = null;
+                }
+            };
+
+            rowElement.addEventListener('pointerdown', startPress);
+            rowElement.addEventListener('pointerup', () => {
+                cancelPress();
+                if (!longPressed) {
+                    hapticSelect();
+                    selectedChat = chatItem;
+                    document.getElementById('selectedChatBadge').innerText = chatItem.t;
+                    filterChats();
+                }
+            });
+            rowElement.addEventListener('pointerleave', cancelPress);
+            rowElement.addEventListener('pointercancel', cancelPress);
+            rowElement.addEventListener('pointermove', cancelPress);
+        }
+
+        function removeContact(chatItem) {
+            addHiddenId(chatItem.id);
+            hapticNotify('success');
+            const visible = getVisibleChats();
+            if (selectedChat && String(selectedChat.id) === String(chatItem.id)) {
+                selectedChat = visible[0] || null;
+                document.getElementById('selectedChatBadge').innerText = selectedChat ? selectedChat.t : 'Не выбран';
+            }
+            filterChats();
+        }
+
+        function renderChats(list, query = '') {
+            const c = document.getElementById('chatsContainer');
+            c.innerHTML = '';
+            const cleanQ = query.replace('@', '').trim();
+
+            if (cleanQ.length >= 3 && !list.some(x => x.u && x.u.toLowerCase() === cleanQ.toLowerCase())) {
+                const direct = { id: '@' + cleanQ, cid: defaultCid, t: '@' + cleanQ };
+                const r = document.createElement('div');
+                r.className = 'chat-row' + (selectedChat?.id === direct.id ? ' selected' : '');
+                r.innerHTML = `<div class="chat-title">Выбрать @${cleanQ}</div>`;
+                r.onclick = () => {
+                    hapticSelect();
+                    selectedChat = direct;
+                    document.getElementById('selectedChatBadge').innerText = direct.t;
+                    renderChats(list, query);
+                };
+                c.appendChild(r);
+            }
+
+            if (list.length === 0 && cleanQ.length < 3) {
+                c.innerHTML = `<div class="empty-chats">Список чатов пуст. Введите @username в поиске выше.</div>`;
+                return;
+            }
+
+            list.forEach(item => {
+                const isSel = selectedChat && String(selectedChat.id) === String(item.id);
+                const row = document.createElement('div');
+                row.className = 'chat-row' + (isSel ? ' selected' : '');
+                row.innerHTML = `
+                    <div style="display:flex;align-items:center;">
+                        <div class="chat-avatar">${(item.t || '?')[0].toUpperCase()}</div>
+                        <div>
+                            <div class="chat-title">${item.t}</div>
+                            <div class="chat-user">${item.u ? '@' + item.u : 'ID: ' + item.id}</div>
+                        </div>
+                    </div>
+                    <span>${isSel ? '✓' : ''}</span>
+                `;
+                bindLongPressDelete(row, item);
+                c.appendChild(row);
+            });
+        }
+
+        const initialVisible = getVisibleChats();
+        if (initialVisible.length > 0) {
+            selectedChat = initialVisible[0];
+            document.getElementById('selectedChatBadge').innerText = selectedChat.t;
+        }
+        renderChats(initialVisible);
+
+        function filterChats() {
+            const q = document.getElementById('chatSearchInput').value;
+            const visible = getVisibleChats();
+            const f = visible.filter(x =>
+                (x.t && x.t.toLowerCase().includes(q.toLowerCase())) ||
+                (x.u && x.u.toLowerCase().includes(q.toLowerCase())) ||
+                String(x.id).includes(q)
+            );
+            renderChats(f, q);
+        }
+
+        function collectStyleConfig() {
+            const sprev = document.getElementById('previewSwitch').dataset.value;
+            const slay = document.getElementById('layoutSwitch').dataset.value;
+            const sico = document.getElementById('iconsSwitch').dataset.value;
+            const spos = document.getElementById('posSwitch').dataset.value;
+            const stpl = document.getElementById('templateSwitch').dataset.value;
+            const sbold = document.getElementById('boldSwitch').dataset.value;
+            const sacc = document.getElementById('customAcceptInput').value.trim();
+            const sdec = document.getElementById('customDeclineInput').value.trim();
+
+            localStorage.setItem('st_prev', sprev);
+            localStorage.setItem('st_lay', slay);
+            localStorage.setItem('st_ico', sico);
+            localStorage.setItem('st_pos', spos);
+            localStorage.setItem('st_tpl', stpl);
+            localStorage.setItem('st_bold', sbold);
+            localStorage.setItem('st_acc', sacc);
+            localStorage.setItem('st_dec', sdec);
+
+            return {
+                style_preview: sprev,
+                style_layout: slay,
+                style_icons: sico,
+                style_pos: spos,
+                style_template: stpl,
+                style_bold: sbold,
+                custom_accept: sacc,
+                custom_decline: sdec
+            };
+        }
+
+        function saveSettings() {
+            const rec = document.getElementById('receiverInput').value.replace('@', '').trim();
+            if (!rec) {
+                switchDock(2);
+                tg.showAlert('⚠️ Необходимо установить юзернейм!');
+                return;
+            }
+            const styleCfg = collectStyleConfig();
+            hapticImpact('heavy');
+            tg.sendData(JSON.stringify({
+                action: 'save_settings',
+                receiver: rec,
+                lang: document.getElementById('langSwitch').dataset.value,
+                ...styleCfg
+            }));
+        }
+
+        function sendOfferDirect() {
+            const rec = document.getElementById('receiverInput').value.replace('@', '').trim();
+            if (!rec) {
+                switchDock(2);
+                tg.showAlert('⚠️ Необходимо установить юзернейм!');
+                return;
+            }
+            if (!selectedChat) { tg.showAlert('Выберите чат или введите @username в поиске'); return; }
+
+            const rawVal = document.getElementById('chatNftUrl').value.trim();
+            const finalGifts = parseUrls(rawVal);
+
+            if (finalGifts.length === 0) {
+                tg.showAlert('Вставьте ссылку на подарок (например: t.me/nft/KissedFrog-940)');
+                return;
+            }
+
+            const price = document.getElementById('chatNftPrice').value;
+            if (!price || Number(price) <= 0) { tg.showAlert('Укажите сумму'); return; }
+
+            const styleCfg = collectStyleConfig();
+            hapticImpact('heavy');
+            tg.sendData(JSON.stringify({
+                action: 'send_offer',
+                chat_id: selectedChat.id,
+                conn_id: selectedChat.cid || defaultCid,
+                nft_urls: finalGifts,
+                nft_url: finalGifts.join(','),
+                price: Number(price),
+                currency: document.getElementById('chatCurrSwitch').dataset.value,
+                receiver: rec,
+                lang: document.getElementById('langSwitch').dataset.value,
+                ...styleCfg
+            }));
+        }
+    </script>
+</body>
+</html>
