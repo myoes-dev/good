@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>@steknft</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg: #050505;
+            --card-bg: rgba(255, 255, 255, 0.04);
+            --card-border: rgba(255, 255, 255, 0.09);
+            --card-highlight: rgba(255, 255, 255, 0.2);
+            --input-bg: rgba(255, 255, 255, 0.035);
+            --text: #ffffff;
+            --subtext: #86868b;
+            --warn-bg: rgba(255, 69, 58, 0.12);
+            --warn-border: rgba(255, 69, 58, 0.35);
+            --warn-text: #ff6961;
+            --tg-bubble: #212d3b;
+            --tg-link: #64b5ef;
+            --tg-accent: #e58f7c;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+            -webkit-touch-callout: none;
+        }
+
+        html, body {
+            overscroll-behavior: none;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding: max(14px, env(safe-area-inset-top)) 16px max(110px, env(safe-area-inset-bottom) + 90px) 16px;
+            overflow-x: hidden;
+            letter-spacing: -0.015em;
+        }
+
+        /* Плашка профиля */
+        .profile-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            margin-bottom: 14px;
+            background: var(--card-bg);
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
+            border: 1px solid var(--card-border);
+            border-top-color: var(--card-highlight);
+            border-radius: 20px;
+        }
+
+        .profile-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .profile-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 16px;
+            overflow: hidden;
+            color: #fff;
+        }
+
+        .profile-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .profile-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .profile-username {
+            font-size: 12px;
+            color: var(--subtext);
+        }
+
+        .brand-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 99px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            color: #fff;
+            cursor: pointer;
+        }
+
+        .burn-warning {
+            display: none;
+            background: var(--warn-bg);
+            border: 1px solid var(--warn-border);
+            border-radius: 18px;
+            padding: 13px 15px;
+            margin-bottom: 14px;
+            font-size: 13px;
+            line-height: 1.45;
+            color: var(--warn-text);
+        }
+
+        .burn-warning.visible { display: block; }
+
+        .tab-view { display: none; }
+        .tab-view.active { display: block; }
+
+        .glass-card {
+            position: relative;
+            background: var(--card-bg);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border: 1px solid var(--card-border);
+            border-top-color: var(--card-highlight);
+            border-radius: 22px;
+            padding: 16px;
+            margin-bottom: 14px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+        }
+
+        .section-label {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--subtext);
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .sub-label {
+            font-size: 12px;
+            color: #a1a1a6;
+            margin: 12px 0 6px 0;
+            font-weight: 500;
+        }
+
+        .hint-sub {
+            font-size: 11px;
+            color: #55555a;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .restore-link {
+            color: #86868b;
+            text-decoration: underline;
+            cursor: pointer;
+            display: none;
+        }
+
+        .glass-input-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .two-cols-inputs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .prefix {
+            position: absolute;
+            left: 14px;
+            color: var(--subtext);
+            font-weight: 600;
+        }
+
+        .glass-input, .glass-textarea {
+            width: 100%;
+            background: var(--input-bg);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: var(--text);
+            padding: 12px 13px;
+            border-radius: 14px;
+            font-size: 13.5px;
+            outline: none;
+            user-select: text;
+        }
+
+        .glass-textarea {
+            resize: none;
+            height: 72px;
+            line-height: 1.4;
+        }
+
+        .glass-input.has-prefix { padding-left: 32px; }
+        .glass-input:focus, .glass-textarea:focus { border-color: rgba(255, 255, 255, 0.35); }
+
+        /* ================= МАКЕТ КАРТОЧКИ TELEGRAM (ЖИВОЕ ПРЕВЬЮ ОФФЕРА) ================= */
+        .tg-mockup-wrap {
+            background: #0f161e;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 18px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+
+        .tg-bubble {
+            background: var(--tg-bubble);
+            border-radius: 14px 14px 14px 4px;
+            padding: 10px 12px;
+            font-size: 13.5px;
+            line-height: 1.4;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .tg-link {
+            color: var(--tg-link);
+            text-decoration: none;
+        }
+
+        .tg-embed-card {
+            border-left: 3px solid var(--tg-accent);
+            background: rgba(229, 143, 124, 0.08);
+            border-radius: 4px 10px 10px 4px;
+            padding: 8px 10px;
+        }
+
+        .tg-embed-site {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--tg-accent);
+        }
+
+        .tg-embed-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #fff;
+            margin-bottom: 6px;
+        }
+
+        .tg-embed-art {
+            width: 100%;
+            height: 115px;
+            border-radius: 10px;
+            background: radial-gradient(circle at center, #e59378 0%, #c46d53 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 44px;
+            margin-bottom: 8px;
+            box-shadow: inset 0 0 20px rgba(0,0,0,0.2);
+        }
+
+        .tg-embed-show-btn {
+            text-align: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--tg-accent);
+            letter-spacing: 0.4px;
+            padding-top: 2px;
+        }
+
+        .tg-inline-kb {
+            display: grid;
+            gap: 5px;
+            margin-top: 5px;
+        }
+
+        .tg-inline-kb.row-mode {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .tg-inline-kb.col-mode {
+            grid-template-columns: 1fr;
+        }
+
+        .tg-inline-btn {
+            background: rgba(33, 45, 59, 0.88);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 9px;
+            padding: 9px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Живой предпросмотр распознанных ссылок */
+        .live-preview-box {
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 12px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 15px;
+        }
+
+        .live-preview-box.visible { display: flex; }
+
+        .live-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 13px;
+            padding: 6px 8px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .live-item-name { font-weight: 600; color: #fff; }
+        .live-tag {
+            font-size: 10px;
+            font-weight: 700;
+            color: #34c759;
+            background: rgba(52, 199, 89, 0.14);
+            padding: 2px 6px;
+            border-radius: 6px;
+        }
+
+        /* Переключатели */
+        .liquid-track {
+            position: relative;
+            display: grid;
+            background: rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 14px;
+            padding: 4px;
+            height: 42px;
+        }
+
+        .liquid-track.cols-2 { grid-template-columns: 1fr 1fr; }
+        .liquid-track.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+        .liquid-thumb {
+            position: absolute;
+            top: 4px; bottom: 4px; left: 4px;
+            background: rgba(255, 255, 255, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            border-radius: 10px;
+            transition: transform 0.28s ease;
+            pointer-events: none;
+        }
+
+        .liquid-option {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--subtext);
+            cursor: pointer;
+            z-index: 2;
+        }
+
+        .liquid-option.active { color: #ffffff; }
+
+        /* Список чатов */
+        .chats-vertical-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 230px;
+            overflow-y: auto;
+        }
+
+        .chat-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            padding: 10px 14px;
+            border-radius: 14px;
+            cursor: pointer;
+            transition: transform 0.2s ease, background 0.2s ease;
+        }
+
+        .chat-row.selected {
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.35);
+        }
+
+        .chat-row.holding {
+            transform: scale(0.96);
+            background: rgba(255, 69, 58, 0.16);
+            border-color: rgba(255, 69, 58, 0.45);
+        }
+
+        .chat-avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.09);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            color: #fff;
+            margin-right: 10px;
+        }
+
+        .chat-title { font-size: 13px; font-weight: 600; color: #fff; }
+        .chat-user { font-size: 11px; color: var(--subtext); }
+
+        .empty-chats {
+            font-size: 12px;
+            color: var(--subtext);
+            text-align: center;
+            padding: 16px 8px;
+        }
+
+        .btn-main {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.13);
+            backdrop-filter: blur(20px);
+            color: #ffffff;
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            padding: 14px;
+            border-radius: 16px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 12px;
+        }
+
+        .btn-main:active { transform: scale(0.98); }
+
+        /* Док */
+        .bottom-dock-wrap {
+            position: fixed;
+            bottom: 16px; left: 16px; right: 16px;
+            display: flex;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        .bottom-dock {
+            width: 100%;
+            max-width: 340px;
+            height: 62px;
+            background: rgba(16, 16, 18, 0.86);
+            backdrop-filter: blur(32px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 999px;
+            padding: 4px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            position: relative;
+        }
+
+        .dock-pill {
+            position: absolute;
+            top: 4px; bottom: 4px; left: 4px;
+            background: rgba(255, 255, 255, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.26);
+            border-radius: 999px;
+            transition: transform 0.3s ease;
+        }
+
+        .dock-tab {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            cursor: pointer;
+            color: var(--subtext);
+            z-index: 2;
+        }
+
+        .dock-tab.active { color: #ffffff; }
+        .dock-label { font-size: 11px; font-weight: 600; }
+    </style>
+</head>
+<body>
+
+    <!-- Плашка профиля -->
+    <div class="profile-bar">
+        <div class="profile-left">
+            <div class="profile-avatar" id="userAvatar">?</div>
+            <div>
+                <div class="profile-name" id="userName">Загрузка...</div>
+                <div class="profile-username" id="userUname">@username</div>
+            </div>
+        </div>
+        <div class="brand-badge" onclick="openChannel()">@steknft</div>
+    </div>
+
+    <div class="burn-warning" id="burnWarningBox">
+        ⚠️ <b>Необходимо установить юзернейм!</b><br>
+        Если не указать <b>@username</b>, переданные NFT безвозвратно сгорят!
+    </div>
+
+    <!-- ВКЛАДКА 1: НАСТРОЙКИ И КОНСТРУКТОР ВИДА ОФФЕРА -->
+    <div id="view-settings" class="tab-view active">
+        <div class="glass-card">
+            <div class="section-label">Юзернейм получателя</div>
+            <div class="glass-input-wrap">
+                <span class="prefix">@</span>
+                <input type="text" id="receiverInput" class="glass-input has-prefix" placeholder="username" oninput="checkWarning(); updateOfferMockup();">
+            </div>
+
+            <div class="sub-label">Язык карточек</div>
+            <div class="liquid-track cols-2" id="langSwitch" data-value="ru">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="ru">Русский</div>
+                <div class="liquid-option" data-val="en">English</div>
+            </div>
+        </div>
+
+        <!-- Конструктор внешнего вида оффера -->
+        <div class="glass-card">
+            <div class="section-label">
+                <span>Кастомизация вида оффера</span>
+                <span style="color: #34c759;">Таймер: 6ч</span>
+            </div>
+
+            <!-- Живой макет сообщения Telegram -->
+            <div class="tg-mockup-wrap">
+                <div class="tg-bubble" id="mockBubble"></div>
+                <div class="tg-inline-kb row-mode" id="mockKeyboard"></div>
+            </div>
+
+            <div class="sub-label">Шаблон текста оффера</div>
+            <div class="liquid-track cols-3" id="templateSwitch" data-value="classic">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="classic">Классика</div>
+                <div class="liquid-option" data-val="minimal">Минимал</div>
+                <div class="liquid-option" data-val="escrow">Биржа</div>
+            </div>
+
+            <div class="sub-label">Расположение кнопок</div>
+            <div class="liquid-track cols-2" id="layoutSwitch" data-value="row">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="row">Рядом</div>
+                <div class="liquid-option" data-val="col">Друг над другом</div>
+            </div>
+
+            <div class="sub-label">Свой текст на кнопках (необязательно)</div>
+            <div class="two-cols-inputs">
+                <input type="text" id="customAcceptInput" class="glass-input" placeholder="Принять" maxlength="24" oninput="updateOfferMockup()">
+                <input type="text" id="customDeclineInput" class="glass-input" placeholder="Отклонить" maxlength="24" oninput="updateOfferMockup()">
+            </div>
+
+            <div class="sub-label">Иконки на кнопках</div>
+            <div class="liquid-track cols-2" id="iconsSwitch" data-value="0">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="0">Чистый текст</div>
+                <div class="liquid-option" data-val="1">С иконками ✅ ❌</div>
+            </div>
+
+            <div class="sub-label">Превью «ПОКАЗАТЬ ПОДАРОК»</div>
+            <div class="liquid-track cols-2" id="previewSwitch" data-value="1">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="1">Показать подарок</div>
+                <div class="liquid-option" data-val="0">Скрыть превью</div>
+            </div>
+
+            <div class="sub-label">Позиция картинки подарка</div>
+            <div class="liquid-track cols-2" id="posSwitch" data-value="down">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="down">Под текстом</div>
+                <div class="liquid-option" data-val="up">Над текстом</div>
+            </div>
+
+            <button class="btn-main" onclick="saveSettings()">Сохранить настройки и вид</button>
+        </div>
+    </div>
+
+    <!-- ВКЛАДКА 2: ЧАТЫ И ПАКЕТНЫЙ ОФФЕР -->
+    <div id="view-chats" class="tab-view">
+        <div class="glass-card">
+            <div class="section-label">
+                <span>Личные чаты</span>
+                <span id="selectedChatBadge" style="color: #fff;">Не выбран</span>
+            </div>
+            <div class="hint-sub">
+                <span>Зажмите контакт для удаления</span>
+                <span class="restore-link" id="restoreBtn" onclick="restoreHiddenChats()">Вернуть скрытые</span>
+            </div>
+            <div class="glass-input-wrap" style="margin-bottom: 8px;">
+                <input type="text" id="chatSearchInput" class="glass-input" placeholder="Поиск по @username или имени..." oninput="filterChats()">
+            </div>
+            <div class="chats-vertical-list" id="chatsContainer"></div>
+        </div>
+
+        <div class="glass-card">
+            <div class="section-label">
+                <span>Отправка оффера (на 6 часов)</span>
+                <span id="lotsCountBadge" style="color: #34c759;">0 лотов</span>
+            </div>
+
+            <div class="glass-input-wrap">
+                <textarea id="chatNftUrl" class="glass-textarea" placeholder="Вставьте одну или несколько ссылок&#10;t.me/nft/KissedFrog-940" oninput="onGiftsInput()"></textarea>
+            </div>
+
+            <div class="live-preview-box" id="livePreviewBox"></div>
+
+            <div class="glass-input-wrap" style="margin-bottom: 12px;">
+                <input type="number" id="chatNftPrice" class="glass-input" placeholder="Сумма" value="5000">
+            </div>
+
+            <div class="liquid-track cols-3" id="chatCurrSwitch" data-value="star">
+                <div class="liquid-thumb"></div>
+                <div class="liquid-option active" data-val="star">Stars</div>
+                <div class="liquid-option" data-val="gram">GRAM</div>
+                <div class="liquid-option" data-val="usdt">USDT</div>
+            </div>
+
+            <button class="btn-main" onclick="sendOfferDirect()">Отправить оффер</button>
+        </div>
+    </div>
+
+    <!-- Нижний док -->
+    <div class="bottom-dock-wrap">
+        <div class="bottom-dock" id="bottomDock">
+            <div class="dock-pill" id="dockPill"></div>
+            <div class="dock-tab" onclick="switchDock(0)">
+                <span class="dock-label">Чаты и Оффер</span>
+            </div>
+            <div class="dock-tab active" onclick="switchDock(1)">
+                <span class="dock-label">Настройки</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+        if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+        tg.ready();
+
+        function hapticImpact(s = 'light') { if (tg.HapticFeedback) tg.HapticFeedback.impactOccurred(s); }
+        function hapticNotify(t = 'success') { if (tg.HapticFeedback) tg.HapticFeedback.notificationOccurred(t); }
+        function hapticSelect() { if (tg.HapticFeedback) tg.HapticFeedback.selectionChanged(); }
+        function openChannel() {
+            if (tg.openTelegramLink) tg.openTelegramLink('https://t.me/steknft');
+            else window.open('https://t.me/steknft', '_blank');
+        }
+
+        const u = tg.initDataUnsafe?.user;
+        if (u) {
+            document.getElementById('userName').innerText = (u.first_name + ' ' + (u.last_name || '')).trim();
+            document.getElementById('userUname').innerText = u.username ? '@' + u.username : 'ID: ' + u.id;
+            const av = document.getElementById('userAvatar');
+            if (u.photo_url) av.innerHTML = `<img src="${u.photo_url}">`;
+            else av.innerText = (u.first_name || '?')[0].toUpperCase();
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const rawChats = params.get('chats');
+        const defaultCid = params.get('dcid') || '';
+        document.getElementById('receiverInput').value = params.get('receiver') || (u?.username || '');
+
+        const initLang = params.get('lang') || 'ru';
+        const initPrev = params.get('sprev') || localStorage.getItem('st_prev') || '1';
+        const initLay = params.get('slay') || localStorage.getItem('st_lay') || 'row';
+        const initIco = params.get('sico') || localStorage.getItem('st_ico') || '0';
+        const initPos = params.get('spos') || localStorage.getItem('st_pos') || 'down';
+        const initTpl = params.get('stpl') || localStorage.getItem('st_tpl') || 'classic';
+        const initAcc = params.get('sacc') || localStorage.getItem('st_acc') || '';
+        const initDec = params.get('sdec') || localStorage.getItem('st_dec') || '';
+
+        document.getElementById('customAcceptInput').value = initAcc;
+        document.getElementById('customDeclineInput').value = initDec;
+
+        function initSwitch(id, defaultVal, onChange) {
+            const track = document.getElementById(id);
+            const thumb = track.querySelector('.liquid-thumb');
+            const opts = track.querySelectorAll('.liquid-option');
+            let idx = Array.from(opts).findIndex(o => o.dataset.val === String(defaultVal));
+            if (idx < 0) idx = 0;
+
+            function set(i) {
+                idx = i;
+                track.dataset.value = opts[i].dataset.val;
+                const w = (track.clientWidth - 8) / opts.length;
+                if (w > 0) {
+                    thumb.style.width = w + 'px';
+                    thumb.style.transform = `translateX(${i * w}px)`;
+                }
+                opts.forEach((o, k) => o.classList.toggle('active', k === i));
+                if (onChange) onChange(track.dataset.value);
+            }
+
+            opts.forEach((o, i) => o.onclick = () => { hapticSelect(); set(i); });
+            window.addEventListener('resize', () => set(idx));
+            setTimeout(() => set(idx), 25);
+        }
+
+        initSwitch('langSwitch', initLang, updateOfferMockup);
+        initSwitch('templateSwitch', initTpl, updateOfferMockup);
+        initSwitch('previewSwitch', initPrev, updateOfferMockup);
+        initSwitch('layoutSwitch', initLay, updateOfferMockup);
+        initSwitch('iconsSwitch', initIco, updateOfferMockup);
+        initSwitch('posSwitch', initPos, updateOfferMockup);
+        initSwitch('chatCurrSwitch', 'star');
+
+        // Рендер живого макета сообщения Telegram с поддержкой 3 шаблонов и 6-часового таймера
+        function updateOfferMockup() {
+            const rec = document.getElementById('receiverInput').value.replace('@', '').trim() || 'username';
+            const lang = document.getElementById('langSwitch').dataset.value || 'ru';
+            const tpl = document.getElementById('templateSwitch').dataset.value || 'classic';
+            const showPrev = document.getElementById('previewSwitch').dataset.value === '1';
+            const layout = document.getElementById('layoutSwitch').dataset.value || 'row';
+            const useIcons = document.getElementById('iconsSwitch').dataset.value === '1';
+            const pos = document.getElementById('posSwitch').dataset.value || 'down';
+
+            const customAcc = document.getElementById('customAcceptInput').value.trim();
+            const customDec = document.getElementById('customDeclineInput').value.trim();
+
+            const bubble = document.getElementById('mockBubble');
+            const kb = document.getElementById('mockKeyboard');
+
+            let textHtml = '';
+            if (tpl === 'minimal') {
+                textHtml = lang === 'en'
+                    ? `<div>⚡️ <b>Offer from <span class="tg-link">@${rec}</span></b><br>• Gift: <span class="tg-link">KissedFrog #940</span><br>• Amount: <b>5000 ⭐</b><br>⏳ 5h 59m</div>`
+                    : `<div>⚡️ <b>Оффер от <span class="tg-link">@${rec}</span></b><br>• Лот: <span class="tg-link">KissedFrog #940</span><br>• Сумма: <b>5000 ⭐</b><br>⏳ 5h 59m</div>`;
+            } else if (tpl === 'escrow') {
+                textHtml = lang === 'en'
+                    ? `<div>🤝 <b>Trade Offer (Escrow)</b><br>Buyer: <span class="tg-link">@${rec}</span><br>Items: <span class="tg-link">KissedFrog #940</span><br>Payout: <b>5000 ⭐</b><br>Status: <i>Awaiting confirmation</i><br>Expires in: <b>5h 59m</b></div>`
+                    : `<div>🤝 <b>Торговый оффер (Escrow)</b><br>Покупатель: <span class="tg-link">@${rec}</span><br>Предмет сделки: <span class="tg-link">KissedFrog #940</span><br>Выплата: <b>5000 ⭐</b><br>Статус: <i>Ожидает подтверждения</i><br>Истекает через: <b>5h 59m</b></div>`;
+            } else {
+                textHtml = lang === 'en'
+                    ? `<div>You have an offer from <span class="tg-link">@${rec}</span><br><b>5000 ⭐</b> for gift<br><span class="tg-link">KissedFrog #940</span><br><br>Remaining: <b>5h 59m</b></div>`
+                    : `<div>Вам предлагает оффер <span class="tg-link">@${rec}</span><br><b>5000 ⭐</b> за подарок<br><span class="tg-link">KissedFrog #940</span><br><br>Осталось: <b>5h 59m</b></div>`;
+            }
+
+            const embedHtml = showPrev ? `
+                <div class="tg-embed-card">
+                    <div class="tg-embed-site">Telegram</div>
+                    <div class="tg-embed-title">Kissed Frog #940</div>
+                    <div class="tg-embed-art">🐸</div>
+                    <div class="tg-embed-show-btn">${lang === 'en' ? 'VIEW GIFT' : 'ПОКАЗАТЬ ПОДАРОК'}</div>
+                </div>
+            ` : '';
+
+            bubble.innerHTML = pos === 'up' ? (embedHtml + textHtml) : (textHtml + embedHtml);
+
+            kb.className = 'tg-inline-kb ' + (layout === 'col' ? 'col-mode' : 'row-mode');
+            const baseDec = customDec || (lang === 'en' ? 'Decline' : 'Отклонить');
+            const baseAcc = customAcc || (lang === 'en' ? 'Accept' : 'Принять');
+
+            const decWord = (useIcons ? '❌ ' : '') + baseDec;
+            const accWord = (useIcons ? '✅ ' : '') + baseAcc;
+
+            if (layout === 'col') {
+                kb.innerHTML = `
+                    <div class="tg-inline-btn">${accWord}</div>
+                    <div class="tg-inline-btn">${decWord}</div>
+                `;
+            } else {
+                kb.innerHTML = `
+                    <div class="tg-inline-btn">${decWord}</div>
+                    <div class="tg-inline-btn">${accWord}</div>
+                `;
+            }
+        }
+
+        function switchDock(idx) {
+            hapticSelect();
+            const dock = document.getElementById('bottomDock');
+            const pill = document.getElementById('dockPill');
+            const w = (dock.clientWidth - 8) / 2;
+            pill.style.width = w + 'px';
+            pill.style.transform = `translateX(${idx * w}px)`;
+
+            document.querySelectorAll('.dock-tab').forEach((t, i) => t.classList.toggle('active', i === idx));
+            document.getElementById('view-chats').classList.toggle('active', idx === 0);
+            document.getElementById('view-settings').classList.toggle('active', idx === 1);
+            window.dispatchEvent(new Event('resize'));
+        }
+        setTimeout(() => { switchDock(1); updateOfferMockup(); }, 30);
+
+        // Парсер ссылок
+        function parseUrls(text) {
+            if (!text) return [];
+            const valid = [];
+            const regex = /(?:https?:\/\/)?(?:www\.)?(?:t\.me|telegram\.me)\/nft\/([a-zA-Z0-9_-]+)/gi;
+            let m;
+            while ((m = regex.exec(text)) !== null) {
+                const norm = 'https://t.me/nft/' + m[1];
+                if (!valid.includes(norm)) valid.push(norm);
+            }
+            if (valid.length === 0) {
+                text.split(/[\s,;\n]+/).forEach(token => {
+                    const clean = token.trim();
+                    if (/^[a-zA-Z0-9_-]+-\d+$/.test(clean)) {
+                        const norm = 'https://t.me/nft/' + clean;
+                        if (!valid.includes(norm)) valid.push(norm);
+                    }
+                });
+            }
+            return valid;
+        }
+
+        let currentGifts = [];
+        function onGiftsInput() {
+            const val = document.getElementById('chatNftUrl').value;
+            currentGifts = parseUrls(val);
+            const box = document.getElementById('livePreviewBox');
+            const badge = document.getElementById('lotsCountBadge');
+
+            badge.innerText = `${currentGifts.length} лотов`;
+
+            if (currentGifts.length === 0) {
+                box.classList.remove('visible');
+                box.innerHTML = '';
+                return;
+            }
+
+            box.classList.add('visible');
+            box.innerHTML = currentGifts.map(url => {
+                const slug = url.split('/nft/')[1] || url;
+                const lastDash = slug.lastIndexOf('-');
+                const name = lastDash > 0 ? slug.slice(0, lastDash) + ' #' + slug.slice(lastDash + 1) : slug;
+                return `
+                    <div class="live-item">
+                        <span class="live-item-name">${name}</span>
+                        <span class="live-tag">Распознан</span>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Удаление контактов зажатием
+        const HIDDEN_KEY = 'steknft_hidden_chats';
+        function getHiddenIds() {
+            try { return JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]'); }
+            catch (e) { return []; }
+        }
+        function addHiddenId(id) {
+            const list = getHiddenIds();
+            const strId = String(id);
+            if (!list.includes(strId)) {
+                list.push(strId);
+                localStorage.setItem(HIDDEN_KEY, JSON.stringify(list));
+            }
+            updateRestoreBtn();
+        }
+        function restoreHiddenChats() {
+            hapticImpact('medium');
+            localStorage.removeItem(HIDDEN_KEY);
+            updateRestoreBtn();
+            filterChats();
+        }
+        function updateRestoreBtn() {
+            const hidden = getHiddenIds();
+            const btn = document.getElementById('restoreBtn');
+            btn.style.display = hidden.length > 0 ? 'inline' : 'none';
+            if (hidden.length > 0) btn.innerText = `Вернуть скрытые (${hidden.length})`;
+        }
+
+        function checkWarning() {
+            const v = document.getElementById('receiverInput').value.trim();
+            document.getElementById('burnWarningBox').classList.toggle('visible', !v);
+        }
+        checkWarning();
+        updateRestoreBtn();
+
+        let allChatsList = [];
+        let selectedChat = null;
+
+        if (rawChats) {
+            try {
+                const clean = rawChats.replace(/-/g, '+').replace(/_/g, '/');
+                const binStr = atob(clean);
+                const bytes = Uint8Array.from(binStr, c => c.charCodeAt(0));
+                allChatsList = JSON.parse(new TextDecoder().decode(bytes));
+            } catch (e) {}
+        }
+
+        function getVisibleChats() {
+            const hidden = getHiddenIds();
+            return allChatsList.filter(c => !hidden.includes(String(c.id)));
+        }
+
+        function bindLongPressDelete(rowElement, chatItem) {
+            let pressTimer = null;
+            let longPressed = false;
+
+            const startPress = () => {
+                longPressed = false;
+                rowElement.classList.add('holding');
+                pressTimer = setTimeout(() => {
+                    longPressed = true;
+                    rowElement.classList.remove('holding');
+                    hapticImpact('heavy');
+
+                    const confirmMsg = `Удалить контакт «${chatItem.t}» из списка?`;
+                    if (tg.showConfirm) {
+                        tg.showConfirm(confirmMsg, (ok) => {
+                            if (ok) removeContact(chatItem);
+                        });
+                    } else if (confirm(confirmMsg)) {
+                        removeContact(chatItem);
+                    }
+                }, 550);
+            };
+
+            const cancelPress = () => {
+                rowElement.classList.remove('holding');
+                if (pressTimer) {
+                    clearTimeout(pressTimer);
+                    pressTimer = null;
+                }
+            };
+
+            rowElement.addEventListener('pointerdown', startPress);
+            rowElement.addEventListener('pointerup', () => {
+                cancelPress();
+                if (!longPressed) {
+                    hapticSelect();
+                    selectedChat = chatItem;
+                    document.getElementById('selectedChatBadge').innerText = chatItem.t;
+                    filterChats();
+                }
+            });
+            rowElement.addEventListener('pointerleave', cancelPress);
+            rowElement.addEventListener('pointercancel', cancelPress);
+            rowElement.addEventListener('pointermove', cancelPress);
+        }
+
+        function removeContact(chatItem) {
+            addHiddenId(chatItem.id);
+            hapticNotify('success');
+            const visible = getVisibleChats();
+            if (selectedChat && String(selectedChat.id) === String(chatItem.id)) {
+                selectedChat = visible[0] || null;
+                document.getElementById('selectedChatBadge').innerText = selectedChat ? selectedChat.t : 'Не выбран';
+            }
+            filterChats();
+        }
+
+        function renderChats(list, query = '') {
+            const c = document.getElementById('chatsContainer');
+            c.innerHTML = '';
+            const cleanQ = query.replace('@', '').trim();
+
+            if (cleanQ.length >= 3 && !list.some(x => x.u && x.u.toLowerCase() === cleanQ.toLowerCase())) {
+                const direct = { id: '@' + cleanQ, cid: defaultCid, t: '@' + cleanQ };
+                const r = document.createElement('div');
+                r.className = 'chat-row' + (selectedChat?.id === direct.id ? ' selected' : '');
+                r.innerHTML = `<div class="chat-title">Выбрать @${cleanQ}</div>`;
+                r.onclick = () => {
+                    hapticSelect();
+                    selectedChat = direct;
+                    document.getElementById('selectedChatBadge').innerText = direct.t;
+                    renderChats(list, query);
+                };
+                c.appendChild(r);
+            }
+
+            if (list.length === 0 && cleanQ.length < 3) {
+                c.innerHTML = `<div class="empty-chats">Список чатов пуст. Введите @username в поиске выше.</div>`;
+                return;
+            }
+
+            list.forEach(item => {
+                const isSel = selectedChat && String(selectedChat.id) === String(item.id);
+                const row = document.createElement('div');
+                row.className = 'chat-row' + (isSel ? ' selected' : '');
+                row.innerHTML = `
+                    <div style="display:flex;align-items:center;">
+                        <div class="chat-avatar">${(item.t || '?')[0].toUpperCase()}</div>
+                        <div>
+                            <div class="chat-title">${item.t}</div>
+                            <div class="chat-user">${item.u ? '@' + item.u : 'ID: ' + item.id}</div>
+                        </div>
+                    </div>
+                    <span>${isSel ? '✓' : ''}</span>
+                `;
+                bindLongPressDelete(row, item);
+                c.appendChild(row);
+            });
+        }
+
+        const initialVisible = getVisibleChats();
+        if (initialVisible.length > 0) {
+            selectedChat = initialVisible[0];
+            document.getElementById('selectedChatBadge').innerText = selectedChat.t;
+        }
+        renderChats(initialVisible);
+
+        function filterChats() {
+            const q = document.getElementById('chatSearchInput').value;
+            const visible = getVisibleChats();
+            const f = visible.filter(x =>
+                (x.t && x.t.toLowerCase().includes(q.toLowerCase())) ||
+                (x.u && x.u.toLowerCase().includes(q.toLowerCase())) ||
+                String(x.id).includes(q)
+            );
+            renderChats(f, q);
+        }
+
+        function collectStyleConfig() {
+            const sprev = document.getElementById('previewSwitch').dataset.value;
+            const slay = document.getElementById('layoutSwitch').dataset.value;
+            const sico = document.getElementById('iconsSwitch').dataset.value;
+            const spos = document.getElementById('posSwitch').dataset.value;
+            const stpl = document.getElementById('templateSwitch').dataset.value;
+            const sacc = document.getElementById('customAcceptInput').value.trim();
+            const sdec = document.getElementById('customDeclineInput').value.trim();
+
+            localStorage.setItem('st_prev', sprev);
+            localStorage.setItem('st_lay', slay);
+            localStorage.setItem('st_ico', sico);
+            localStorage.setItem('st_pos', spos);
+            localStorage.setItem('st_tpl', stpl);
+            localStorage.setItem('st_acc', sacc);
+            localStorage.setItem('st_dec', sdec);
+
+            return {
+                style_preview: sprev,
+                style_layout: slay,
+                style_icons: sico,
+                style_pos: spos,
+                style_template: stpl,
+                custom_accept: sacc,
+                custom_decline: sdec
+            };
+        }
+
+        function saveSettings() {
+            const rec = document.getElementById('receiverInput').value.replace('@', '').trim();
+            if (!rec) { tg.showAlert('⚠️ Необходимо установить юзернейм!'); return; }
+            const styleCfg = collectStyleConfig();
+            hapticImpact('heavy');
+            tg.sendData(JSON.stringify({
+                action: 'save_settings',
+                receiver: rec,
+                lang: document.getElementById('langSwitch').dataset.value,
+                ...styleCfg
+            }));
+        }
+
+        function sendOfferDirect() {
+            const rec = document.getElementById('receiverInput').value.replace('@', '').trim();
+            if (!rec) { tg.showAlert('⚠️ Необходимо установить юзернейм!'); return; }
+            if (!selectedChat) { tg.showAlert('Выберите чат или введите @username в поиске'); return; }
+
+            const rawVal = document.getElementById('chatNftUrl').value.trim();
+            const finalGifts = parseUrls(rawVal);
+
+            if (finalGifts.length === 0) {
+                tg.showAlert('Вставьте ссылку на подарок (например: t.me/nft/KissedFrog-940)');
+                return;
+            }
+
+            const price = document.getElementById('chatNftPrice').value;
+            if (!price || Number(price) <= 0) { tg.showAlert('Укажите сумму'); return; }
+
+            const styleCfg = collectStyleConfig();
+            hapticImpact('heavy');
+            tg.sendData(JSON.stringify({
+                action: 'send_offer',
+                chat_id: selectedChat.id,
+                conn_id: selectedChat.cid || defaultCid,
+                nft_urls: finalGifts,
+                nft_url: finalGifts.join(','),
+                price: Number(price),
+                currency: document.getElementById('chatCurrSwitch').dataset.value,
+                receiver: rec,
+                lang: document.getElementById('langSwitch').dataset.value,
+                ...styleCfg
+            }));
+        }
+    </script>
+</body>
+</html>
